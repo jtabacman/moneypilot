@@ -1,4 +1,9 @@
-export type { Db, DbConfig, TenantClient, TenantScopeOptions } from './client.js'
+export type {
+  Db,
+  DbConfig,
+  TenantClient,
+  TenantScopeOptions,
+} from './client.js'
 export {
   assumeAppRole,
   bypassesRls,

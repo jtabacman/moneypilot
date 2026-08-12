@@ -5,7 +5,10 @@ import { parseQif } from './parse.js'
 
 const utf8 = (text: string) => new TextEncoder().encode(text)
 const parse = (text: string, currency = 'USD', dateOrder?: 'DMY' | 'MDY' | 'YMD') =>
-  parseQif(utf8(text), { currency, ...(dateOrder === undefined ? {} : { dateOrder }) })
+  parseQif(utf8(text), {
+    currency,
+    ...(dateOrder === undefined ? {} : { dateOrder }),
+  })
 
 /** QIF típico de Quicken para EE.UU. */
 const QUICKEN = `!Type:Bank
@@ -48,7 +51,10 @@ describe('estructura del fichero', () => {
   })
 
   it('conserva todos los campos en raw', () => {
-    expect(statement.lines[0]?.raw).toMatchObject({ L: 'Groceries', P: 'WHOLE FOODS' })
+    expect(statement.lines[0]?.raw).toMatchObject({
+      L: 'Groceries',
+      P: 'WHOLE FOODS',
+    })
   })
 
   it('lee el nombre de cuenta del bloque !Account sin tomarlo por transacción', () => {

@@ -144,7 +144,10 @@ export function inspectCsv(bytes: Uint8Array, options?: Partial<CsvParseOptions>
   // fichero sin cabecera es donde más falta hace poder corregir a mano.
   const detected =
     headerRow === null ? inferMappingFromData(dataRows, notes) : mapFromHeaders(headers)
-  const mapping: ColumnMapping = { ...detected, ...stripUndefined(options?.mapping ?? {}) }
+  const mapping: ColumnMapping = {
+    ...detected,
+    ...stripUndefined(options?.mapping ?? {}),
+  }
 
   const layout: AmountLayout =
     mapping.debit !== undefined || mapping.credit !== undefined
@@ -370,7 +373,11 @@ export function parseCsv(bytes: Uint8Array, options: CsvParseOptions): ParsedSta
 
   const warnings: ParseWarning[] = []
   for (const note of inspection.notes) {
-    warnings.push({ severity: 'warning', code: 'esquema_incierto', message: note })
+    warnings.push({
+      severity: 'warning',
+      code: 'esquema_incierto',
+      message: note,
+    })
   }
   if (inspection.confidence < 1) {
     warnings.push({
@@ -471,7 +478,9 @@ function readAmount(
     index === undefined ? '' : (row.cells[index] ?? '').trim()
 
   const parse = (raw: string): bigint | null => {
-    const parsed = parseAmount(raw, { decimalSeparator: inspection.decimalSeparator })
+    const parsed = parseAmount(raw, {
+      decimalSeparator: inspection.decimalSeparator,
+    })
     if (parsed === null) return null
     try {
       return fromDecimalString(parsed.canonical, currency).amount

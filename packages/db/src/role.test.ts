@@ -111,7 +111,9 @@ suite('cambio de rol dentro de la transacción', () => {
   it('rechaza un nombre de rol que no sea un identificador simple', async () => {
     // El nombre se interpola en el SQL porque `set role` no admite parámetros.
     await expect(
-      withTenant(admin, casaA, async () => 1, { role: 'app; drop table tenant' }),
+      withTenant(admin, casaA, async () => 1, {
+        role: 'app; drop table tenant',
+      }),
     ).rejects.toThrow(/Nombre de rol inválido/)
   })
 })

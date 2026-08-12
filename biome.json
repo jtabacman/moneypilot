@@ -1,7 +1,16 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.8/schema.json",
   "files": {
-    "includes": ["**/*.ts", "**/*.json", "!**/dist", "!**/node_modules"]
+    "includes": [
+      "**/*.ts",
+      "**/*.tsx",
+      "**/*.json",
+      "!**/dist",
+      "!**/.next",
+      "!**/node_modules",
+      "!**/next-env.d.ts",
+      "!**/*.tsbuildinfo"
+    ]
   },
   "formatter": {
     "enabled": true,
@@ -12,7 +21,7 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "preset": "recommended",
+      "recommended": true,
       "suspicious": {
         "noExplicitAny": "error"
       },
@@ -21,7 +30,8 @@
         "noNonNullAssertion": "error"
       },
       "complexity": {
-        "noForEach": "off"
+        "noForEach": "off",
+        "useLiteralKeys": "off"
       }
     }
   },

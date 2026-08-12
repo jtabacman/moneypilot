@@ -36,7 +36,11 @@ export function detectDelimiter(text: string): Delimiter {
     .slice(0, 30)
   if (sample.length === 0) return ','
 
-  let best: { delimiter: Delimiter; columns: number; consistency: number } | null = null
+  let best: {
+    delimiter: Delimiter
+    columns: number
+    consistency: number
+  } | null = null
 
   for (const delimiter of CANDIDATE_DELIMITERS) {
     const counts = sample.map((line) => tokenizeLine(line, delimiter).length)

@@ -132,7 +132,11 @@ function splitIntegerAndFraction(
 
   if (tail.length > exponent) return null
 
-  return { integer: body.slice(0, at), fraction: tail.padEnd(exponent, '0'), ambiguous: false }
+  return {
+    integer: body.slice(0, at),
+    fraction: tail.padEnd(exponent, '0'),
+    ambiguous: false,
+  }
 }
 
 function stripSeparators(value: string): string {

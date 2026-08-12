@@ -47,7 +47,10 @@ describe('invariante de balanceo', () => {
     const targets = [GROCERIES, COMPANY]
     const postings: Posting[] = [
       { accountId: CHECKING, amount: fromDecimalString('-100.00', EUR) },
-      ...parts.map((amount, index) => ({ accountId: targets[index] ?? GROCERIES, amount })),
+      ...parts.map((amount, index) => ({
+        accountId: targets[index] ?? GROCERIES,
+        amount,
+      })),
     ]
     expect(isBalanced(postings)).toBe(true)
     expect(parts.map((p) => p.amount)).toEqual([6000n, 4000n])

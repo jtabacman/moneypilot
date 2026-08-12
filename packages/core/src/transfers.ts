@@ -73,7 +73,11 @@ interface Candidate {
   readonly amountDiff: bigint
 }
 
-const CONFIDENCE_RANK: Record<TransferConfidence, number> = { exact: 0, fee: 1, fx: 2 }
+const CONFIDENCE_RANK: Record<TransferConfidence, number> = {
+  exact: 0,
+  fee: 1,
+  fx: 2,
+}
 
 /**
  * Empareja salidas con entradas de forma determinista.

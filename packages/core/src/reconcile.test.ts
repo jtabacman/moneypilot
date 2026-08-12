@@ -118,7 +118,11 @@ describe('informe de importación', () => {
   it('una sola fila rechazada ensucia el informe', () => {
     const report = baseReport({
       rejected: [
-        { lineNumber: 42, reason: 'fecha_ilegible', detail: 'no se pudo inferir el formato' },
+        {
+          lineNumber: 42,
+          reason: 'fecha_ilegible',
+          detail: 'no se pudo inferir el formato',
+        },
       ],
     })
     expect(importReportIsClean(report)).toBe(false)
@@ -176,7 +180,12 @@ describe('informe de importación', () => {
   it('un fichero sin transacciones no es una importación exitosa', () => {
     // El peor modo de fallo del producto: declarar que todo salió bien
     // cuando no pasó nada. La ausencia no se ve; hay que declararla.
-    const empty = baseReport({ linesRead: 0, imported: 0, duplicates: 0, needsReview: 0 })
+    const empty = baseReport({
+      linesRead: 0,
+      imported: 0,
+      duplicates: 0,
+      needsReview: 0,
+    })
     expect(importReportIsClean(empty)).toBe(false)
     expect(renderImportReport(empty)).toContain('no contenía ninguna transacción legible')
   })
@@ -193,7 +202,11 @@ describe('informe de importación', () => {
           },
         ],
         warnings: [
-          { severity: 'warning', code: 'fecha_ambigua', message: 'formato inferido como DD/MM' },
+          {
+            severity: 'warning',
+            code: 'fecha_ambigua',
+            message: 'formato inferido como DD/MM',
+          },
         ],
       }),
     )

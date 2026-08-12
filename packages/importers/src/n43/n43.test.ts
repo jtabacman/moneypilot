@@ -78,13 +78,19 @@ describe('fichero real de un banco español', () => {
     expect(statement?.openingBalance?.on).toBe('2020-02-03')
     expect(
       toDecimalString(
-        statement?.openingBalance?.amount ?? { amount: 0n, currency: 'EUR' as never },
+        statement?.openingBalance?.amount ?? {
+          amount: 0n,
+          currency: 'EUR' as never,
+        },
       ),
     ).toBe('2463.43')
     expect(statement?.closingBalance?.on).toBe('2020-02-10')
     expect(
       toDecimalString(
-        statement?.closingBalance?.amount ?? { amount: 0n, currency: 'EUR' as never },
+        statement?.closingBalance?.amount ?? {
+          amount: 0n,
+          currency: 'EUR' as never,
+        },
       ),
     ).toBe('2301.59')
   })

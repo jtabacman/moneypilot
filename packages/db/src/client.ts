@@ -151,7 +151,10 @@ export async function assumeAppRole(
 export async function bypassesRls(db: Db): Promise<boolean> {
   const client = await db.connect()
   try {
-    const { rows } = await client.query<{ bypass: boolean; superuser: boolean }>(
+    const { rows } = await client.query<{
+      bypass: boolean
+      superuser: boolean
+    }>(
       `select rolbypassrls as bypass, rolsuper as superuser
          from pg_roles where rolname = current_user`,
     )

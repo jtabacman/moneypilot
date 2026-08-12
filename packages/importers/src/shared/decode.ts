@@ -44,13 +44,25 @@ export function normalizeEncodingLabel(declared: string | undefined): string | u
  */
 export function decodeBuffer(bytes: Uint8Array, declared?: string): DecodedFile {
   if (startsWith(bytes, BOM_UTF8)) {
-    return { text: decodeWith(bytes.subarray(3), 'utf-8'), encoding: 'utf-8', hadBom: true }
+    return {
+      text: decodeWith(bytes.subarray(3), 'utf-8'),
+      encoding: 'utf-8',
+      hadBom: true,
+    }
   }
   if (startsWith(bytes, BOM_UTF16LE)) {
-    return { text: decodeWith(bytes.subarray(2), 'utf-16le'), encoding: 'utf-16le', hadBom: true }
+    return {
+      text: decodeWith(bytes.subarray(2), 'utf-16le'),
+      encoding: 'utf-16le',
+      hadBom: true,
+    }
   }
   if (startsWith(bytes, BOM_UTF16BE)) {
-    return { text: decodeWith(bytes.subarray(2), 'utf-16be'), encoding: 'utf-16be', hadBom: true }
+    return {
+      text: decodeWith(bytes.subarray(2), 'utf-16be'),
+      encoding: 'utf-16be',
+      hadBom: true,
+    }
   }
 
   const label = normalizeEncodingLabel(declared)
@@ -67,7 +79,11 @@ export function decodeBuffer(bytes: Uint8Array, declared?: string): DecodedFile 
     const decoder = new TextDecoder('utf-8', { fatal: true })
     return { text: decoder.decode(bytes), encoding: 'utf-8', hadBom: false }
   } catch {
-    return { text: decodeWith(bytes, 'windows-1252'), encoding: 'windows-1252', hadBom: false }
+    return {
+      text: decodeWith(bytes, 'windows-1252'),
+      encoding: 'windows-1252',
+      hadBom: false,
+    }
   }
 }
 

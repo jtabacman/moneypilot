@@ -122,7 +122,11 @@ suite('aislamiento entre hogares', () => {
   it('RLS está forzado, no sólo habilitado', async () => {
     // Sin `force`, el dueño de la tabla queda exento de sus propias policies.
     const { rows } = await withoutTenantScope(admin, async (client) =>
-      client.query<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }>(
+      client.query<{
+        relname: string
+        relrowsecurity: boolean
+        relforcerowsecurity: boolean
+      }>(
         `select relname, relrowsecurity, relforcerowsecurity
            from pg_class
           where relname in ('tenant','account','entry','posting','posting_dimension')

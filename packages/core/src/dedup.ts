@@ -141,7 +141,11 @@ export function classifyIncoming(
       results.push({
         incoming: tx,
         fingerprint,
-        verdict: { kind: 'duplicate', reason: 'fingerprint', existingId: byHash },
+        verdict: {
+          kind: 'duplicate',
+          reason: 'fingerprint',
+          existingId: byHash,
+        },
       })
       continue
     }
@@ -159,7 +163,11 @@ export function classifyIncoming(
         results.push({
           incoming: tx,
           fingerprint,
-          verdict: { kind: 'duplicate', reason: 'external_id', existingId: candidate.id },
+          verdict: {
+            kind: 'duplicate',
+            reason: 'external_id',
+            existingId: candidate.id,
+          },
         })
         continue
       }

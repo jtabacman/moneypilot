@@ -62,7 +62,12 @@ export function inspectConnectionString(url: string): ConnectionCheck {
   try {
     parsed = new URL(url)
   } catch {
-    return { pooled: false, port: null, host: null, warning: 'No es una URL válida.' }
+    return {
+      pooled: false,
+      port: null,
+      host: null,
+      warning: 'No es una URL válida.',
+    }
   }
 
   const host = parsed.hostname

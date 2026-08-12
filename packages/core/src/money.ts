@@ -16,7 +16,10 @@ export interface Money {
 }
 
 export function money(amount: bigint, currency: CurrencyCode | string): Money {
-  return { amount, currency: typeof currency === 'string' ? currencyCode(currency) : currency }
+  return {
+    amount,
+    currency: typeof currency === 'string' ? currencyCode(currency) : currency,
+  }
 }
 
 export function zero(currency: CurrencyCode | string): Money {
@@ -133,7 +136,10 @@ export function allocate(total: Money, weights: readonly number[]): Money[] {
     leftover -= 1n
   }
 
-  return bases.map((base) => ({ amount: base * sign, currency: total.currency }))
+  return bases.map((base) => ({
+    amount: base * sign,
+    currency: total.currency,
+  }))
 }
 
 /**

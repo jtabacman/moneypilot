@@ -25,14 +25,20 @@ export function detectFormat(bytes: Uint8Array): FormatDetection {
   }
 
   if (/^!(Type:|Account|Option)/im.test(head)) {
-    return { format: 'qif', evidence: 'contiene una directiva QIF (!Type, !Account)' }
+    return {
+      format: 'qif',
+      evidence: 'contiene una directiva QIF (!Type, !Account)',
+    }
   }
 
   // Norma 43: registros que empiezan por 11 y 22, de largo fijo cercano a 80.
   const lines = head.split(/\r?\n/).filter((line) => line.trim() !== '')
   const first = lines[0] ?? ''
   if (/^11\d{18}/.test(first) && lines.some((line) => /^22/.test(line))) {
-    return { format: 'n43', evidence: 'registros de cabecera 11 y movimiento 22 de Norma 43' }
+    return {
+      format: 'n43',
+      evidence: 'registros de cabecera 11 y movimiento 22 de Norma 43',
+    }
   }
 
   if (/<Document[\s>]/i.test(head) && /camt\.053/i.test(head)) {

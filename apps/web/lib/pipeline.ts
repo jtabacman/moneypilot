@@ -248,7 +248,12 @@ export interface WireReport {
   readonly periodFrom: string | null
   readonly periodTo: string | null
   readonly accounts: WireAccount[]
-  readonly warnings: { severity: string; code: string; message: string; lineNumber?: number }[]
+  readonly warnings: {
+    severity: string
+    code: string
+    message: string
+    lineNumber?: number
+  }[]
   readonly verifiedAccounts: number
   readonly isEmpty: boolean
   readonly isClean: boolean

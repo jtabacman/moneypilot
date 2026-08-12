@@ -55,7 +55,12 @@ describe('pasada 1: determinista', () => {
     const existing = rows.map((row, i) => existingFrom(row, `tx-${i}`))
 
     const summary = summarizeDedup(classifyIncoming(rows, existing))
-    expect(summary).toEqual({ total: 2, fresh: 0, duplicates: 2, needsReview: 0 })
+    expect(summary).toEqual({
+      total: 2,
+      fresh: 0,
+      duplicates: 2,
+      needsReview: 0,
+    })
   })
 
   it('importa el solapamiento de dos ficheros una sola vez', () => {
@@ -106,7 +111,9 @@ describe('pasada 1: determinista', () => {
       }),
       'tx-1',
     )
-    const row = incoming(1, '2026-03-01', '-42.50', 'MERCADONA', { externalId: 'FIT-1' })
+    const row = incoming(1, '2026-03-01', '-42.50', 'MERCADONA', {
+      externalId: 'FIT-1',
+    })
 
     const [result] = classifyIncoming([row], [inOtherAccount])
     expect(result?.verdict.kind).toBe('new')
@@ -119,7 +126,9 @@ describe('pasada 1: determinista', () => {
       incoming(1, '2026-03-01', '-42.50', 'MERCADONA', { externalId: 'FIT-1' }),
       'tx-1',
     )
-    const row = incoming(1, '2026-03-01', '-51.00', 'MERCADONA', { externalId: 'FIT-1' })
+    const row = incoming(1, '2026-03-01', '-51.00', 'MERCADONA', {
+      externalId: 'FIT-1',
+    })
 
     const [result] = classifyIncoming([row], [existing])
     expect(result?.verdict.kind).not.toBe('duplicate')
@@ -127,13 +136,20 @@ describe('pasada 1: determinista', () => {
 
   it('detecta duplicado por FITID aunque cambie la descripción', () => {
     const existing = existingFrom(
-      incoming(1, '2026-03-01', '-42.50', 'MERCADONA 1234', { externalId: 'FIT-9' }),
+      incoming(1, '2026-03-01', '-42.50', 'MERCADONA 1234', {
+        externalId: 'FIT-9',
+      }),
       'tx-9',
     )
-    const row = incoming(1, '2026-03-01', '-42.50', 'MERCADONA SA MADRID', { externalId: 'FIT-9' })
+    const row = incoming(1, '2026-03-01', '-42.50', 'MERCADONA SA MADRID', {
+      externalId: 'FIT-9',
+    })
 
     const [result] = classifyIncoming([row], [existing])
-    expect(result?.verdict).toMatchObject({ kind: 'duplicate', reason: 'external_id' })
+    expect(result?.verdict).toMatchObject({
+      kind: 'duplicate',
+      reason: 'external_id',
+    })
   })
 })
 
@@ -221,7 +237,9 @@ describe('propiedades del lote', () => {
     // Acá el banco sí repitió el movimiento: mismo FITID, importe y fecha.
     const rows = [
       incoming(1, '2026-03-01', '-42.50', 'MERCADONA', { externalId: 'FIT-7' }),
-      incoming(2, '2026-03-01', '-42.50', 'MERCADONA CENTRO', { externalId: 'FIT-7' }),
+      incoming(2, '2026-03-01', '-42.50', 'MERCADONA CENTRO', {
+        externalId: 'FIT-7',
+      }),
     ]
     const verdicts = classifyIncoming(rows, []).map((c) => c.verdict.kind)
     expect(verdicts).toEqual(['new', 'duplicate'])

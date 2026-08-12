@@ -11,7 +11,9 @@ export type EntryId = string & { readonly __brand: 'EntryId' }
 export type PostingId = string & { readonly __brand: 'PostingId' }
 export type ImportBatchId = string & { readonly __brand: 'ImportBatchId' }
 export type DimensionId = string & { readonly __brand: 'DimensionId' }
-export type DimensionValueId = string & { readonly __brand: 'DimensionValueId' }
+export type DimensionValueId = string & {
+  readonly __brand: 'DimensionValueId'
+}
 
 export const newTenantId = (): TenantId => uuidv7() as TenantId
 export const newAccountId = (): AccountId => uuidv7() as AccountId

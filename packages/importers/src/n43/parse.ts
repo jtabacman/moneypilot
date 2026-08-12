@@ -200,7 +200,10 @@ class AccountBuilder {
       lineNumber,
       bookedOn,
       valuedOn,
-      amount: { amount: applySign(parsed.amount, sign), currency: this.currency },
+      amount: {
+        amount: applySign(parsed.amount, sign),
+        currency: this.currency,
+      },
       concepts: [],
       raw: {
         oficina: line.slice(6, 10).trim(),
@@ -294,10 +297,20 @@ class AccountBuilder {
       },
       ...(this.openingBalance === undefined || this.openingDate === undefined
         ? {}
-        : { openingBalance: { amount: this.openingBalance, on: this.openingDate } }),
+        : {
+            openingBalance: {
+              amount: this.openingBalance,
+              on: this.openingDate,
+            },
+          }),
       ...(this.closingBalance === undefined || this.closingDate === undefined
         ? {}
-        : { closingBalance: { amount: this.closingBalance, on: this.closingDate } }),
+        : {
+            closingBalance: {
+              amount: this.closingBalance,
+              on: this.closingDate,
+            },
+          }),
       lines,
       warnings,
     }

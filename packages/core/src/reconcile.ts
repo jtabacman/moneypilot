@@ -54,7 +54,10 @@ export function reconcileAccount(input: AccountReconciliationInput): AccountReco
   const computed =
     opening === null
       ? null
-      : { amount: opening.amount + input.movements.amount, currency: input.currency }
+      : {
+          amount: opening.amount + input.movements.amount,
+          currency: input.currency,
+        }
 
   const delta = computed === null || reported === null ? null : subtract(computed, reported)
 

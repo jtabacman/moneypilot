@@ -5,8 +5,17 @@ import type { WireReport } from '../lib/pipeline'
 
 interface Response {
   readonly report?: WireReport
-  readonly review?: { lineNumber: number; bookedOn: string; description: string }[]
-  readonly transfers?: { from: string; to: string; on: string; confidence: string }[]
+  readonly review?: {
+    lineNumber: number
+    bookedOn: string
+    description: string
+  }[]
+  readonly transfers?: {
+    from: string
+    to: string
+    on: string
+    confidence: string
+  }[]
   readonly error?: string
 }
 
@@ -14,7 +23,11 @@ const CURRENCIES = ['EUR', 'USD', 'GBP', 'CHF', 'ARS', 'MXN']
 
 const SAMPLES = [
   { file: 'movements.n43', label: 'Norma 43 · banco español', currency: 'EUR' },
-  { file: 'checking.ofx', label: 'OFX · cuenta corriente EE.UU.', currency: 'USD' },
+  {
+    file: 'checking.ofx',
+    label: 'OFX · cuenta corriente EE.UU.',
+    currency: 'USD',
+  },
   { file: 'anzcc.ofx', label: 'OFX · tarjeta de crédito', currency: 'AUD' },
   { file: 'ejemplo-bbva.csv', label: 'CSV · debe y haber', currency: 'EUR' },
 ]
@@ -34,10 +47,15 @@ export function Importer() {
       form.set('file', file)
       form.set('currency', currency)
       try {
-        const response = await fetch('/api/import', { method: 'POST', body: form })
+        const response = await fetch('/api/import', {
+          method: 'POST',
+          body: form,
+        })
         setResult((await response.json()) as Response)
       } catch {
-        setResult({ error: 'No se pudo contactar al servidor. Probá de nuevo.' })
+        setResult({
+          error: 'No se pudo contactar al servidor. Probá de nuevo.',
+        })
       } finally {
         setBusy(false)
       }
@@ -45,31 +63,35 @@ export function Importer() {
     [currency],
   )
 
-  const loadSample = useCallback(
-    async (name: string, sampleCurrency: string) => {
-      setCurrency(sampleCurrency)
-      setBusy(true)
-      setResult(null)
-      try {
-        const response = await fetch(`/samples/${name}`)
-        const blob = await response.blob()
-        const form = new FormData()
-        form.set('file', new File([blob], name))
-        form.set('currency', sampleCurrency)
-        const imported = await fetch('/api/import', { method: 'POST', body: form })
-        setResult((await imported.json()) as Response)
-      } catch {
-        setResult({ error: `No se pudo cargar el ejemplo ${name}.` })
-      } finally {
-        setBusy(false)
-      }
-    },
-    [],
-  )
+  const loadSample = useCallback(async (name: string, sampleCurrency: string) => {
+    setCurrency(sampleCurrency)
+    setBusy(true)
+    setResult(null)
+    try {
+      const response = await fetch(`/samples/${name}`)
+      const blob = await response.blob()
+      const form = new FormData()
+      form.set('file', new File([blob], name))
+      form.set('currency', sampleCurrency)
+      const imported = await fetch('/api/import', {
+        method: 'POST',
+        body: form,
+      })
+      setResult((await imported.json()) as Response)
+    } catch {
+      setResult({ error: `No se pudo cargar el ejemplo ${name}.` })
+    } finally {
+      setBusy(false)
+    }
+  }, [])
 
   return (
     <>
-      <div
+      {/* Arrastrar es una comodidad, no el único camino: el botón "Elegir
+          fichero" de adentro es un control real, enfocable con teclado y
+          anunciado por lector de pantalla. La región sólo agrupa y etiqueta. */}
+      <section
+        aria-label="Subir un extracto bancario"
         className={`drop${hot ? ' hot' : ''}${busy ? ' busy' : ''}`}
         onDragOver={(event) => {
           event.preventDefault()
@@ -86,7 +108,14 @@ export function Importer() {
         <h2>{busy ? 'Leyendo el fichero…' : 'Arrastrá un extracto acá'}</h2>
         <p>OFX · QFX · QIF · CSV · Norma 43 — hasta 4 MB</p>
 
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+        <div
+          style={{
+            display: 'flex',
+            gap: 8,
+            justifyContent: 'center',
+            flexWrap: 'wrap',
+          }}
+        >
           <button
             type="button"
             className="primary"
@@ -95,7 +124,14 @@ export function Importer() {
           >
             Elegir fichero
           </button>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 13,
+            }}
+          >
             <span style={{ color: 'var(--ink-soft)' }}>Moneda</span>
             <select
               value={currency}
@@ -144,7 +180,7 @@ export function Importer() {
             ))}
           </div>
         </div>
-      </div>
+      </section>
 
       {result?.error !== undefined && (
         <div className="error">
@@ -155,7 +191,11 @@ export function Importer() {
       )}
 
       {result?.report !== undefined && (
-        <Report report={result.report} review={result.review ?? []} transfers={result.transfers ?? []} />
+        <Report
+          report={result.report}
+          review={result.review ?? []}
+          transfers={result.transfers ?? []}
+        />
       )}
     </>
   )
@@ -187,8 +227,16 @@ function Report({
         <Tile label="Leídas" value={report.linesRead} />
         <Tile label="Importadas" value={report.imported} />
         <Tile label="Duplicadas" value={report.duplicates} />
-        <Tile label="A revisión" value={report.needsReview} tone={report.needsReview > 0 ? 'warn' : undefined} />
-        <Tile label="Rechazadas" value={report.rejected.length} tone={report.rejected.length > 0 ? 'bad' : undefined} />
+        <Tile
+          label="A revisión"
+          value={report.needsReview}
+          tone={report.needsReview > 0 ? 'warn' : undefined}
+        />
+        <Tile
+          label="Rechazadas"
+          value={report.rejected.length}
+          tone={report.rejected.length > 0 ? 'bad' : undefined}
+        />
         <Tile label="Transferencias" value={report.transfersMatched} />
       </dl>
 
@@ -209,7 +257,10 @@ function Report({
             {report.accounts.map((account) => (
               <tr key={account.accountLabel}>
                 <td>
-                  {account.accountLabel} <span style={{ color: 'var(--ink-faint)', fontSize: 11 }}>{account.currency}</span>
+                  {account.accountLabel}{' '}
+                  <span style={{ color: 'var(--ink-faint)', fontSize: 11 }}>
+                    {account.currency}
+                  </span>
                 </td>
                 <td className="r num">{money(account.openingBalance)}</td>
                 <td className={`r num${account.movements.amount.startsWith('-') ? ' neg' : ''}`}>
@@ -353,7 +404,9 @@ function Tile({
       <dt>{label}</dt>
       <dd
         className="num"
-        style={{ color: tone === 'bad' ? 'var(--debit)' : tone === 'warn' ? 'var(--warn)' : undefined }}
+        style={{
+          color: tone === 'bad' ? 'var(--debit)' : tone === 'warn' ? 'var(--warn)' : undefined,
+        }}
       >
         {value}
       </dd>

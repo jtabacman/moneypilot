@@ -177,7 +177,10 @@ describe('OFX 1.x SGML', () => {
     expect(statement?.closingBalance?.on).toBe('2026-03-31')
     expect(
       toDecimalString(
-        statement?.closingBalance?.amount ?? { amount: 0n, currency: 'USD' as never },
+        statement?.closingBalance?.amount ?? {
+          amount: 0n,
+          currency: 'USD' as never,
+        },
       ),
     ).toBe('8457.31')
   })

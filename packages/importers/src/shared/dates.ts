@@ -71,7 +71,11 @@ export function detectDateOrder(samples: readonly string[]): DateOrderDetection 
   }
 
   if (parsed === 0) {
-    return { order: 'MDY', ambiguous: true, evidence: 'no se pudo leer ninguna fecha' }
+    return {
+      order: 'MDY',
+      ambiguous: true,
+      evidence: 'no se pudo leer ninguna fecha',
+    }
   }
 
   if (fourDigitFirst > 0) {

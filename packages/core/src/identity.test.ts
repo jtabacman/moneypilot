@@ -73,9 +73,12 @@ describe('huella canónica', () => {
     const base = transactionFingerprint(row('MERCADONA', '-42.50'))
     expect(transactionFingerprint(row('MERCADONA', '-42.51'))).not.toBe(base)
     expect(transactionFingerprint(row('MERCADONA', '42.50'))).not.toBe(base)
-    expect(transactionFingerprint({ ...row('MERCADONA', '-42.50'), accountId: 'acct-2' })).not.toBe(
-      base,
-    )
+    expect(
+      transactionFingerprint({
+        ...row('MERCADONA', '-42.50'),
+        accountId: 'acct-2',
+      }),
+    ).not.toBe(base)
     expect(
       transactionFingerprint({
         ...row('MERCADONA', '-42.50'),
