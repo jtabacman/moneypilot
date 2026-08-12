@@ -355,3 +355,155 @@ tbody tr:nth-child(even) {
 		animation: none !important;
 	}
 }
+
+/* ── Barra superior y sesión ───────────────────────────────────────── */
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 26px;
+}
+.topbar .brand {
+  margin-bottom: 0;
+}
+.who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+}
+.who b {
+  display: block;
+  font-weight: 600;
+}
+.who small {
+  color: var(--ink-faint);
+  font-size: 11.5px;
+}
+a.linklike {
+  text-decoration: none;
+  color: var(--ink);
+  display: inline-block;
+}
+
+/* ── Entrar / crear cuenta ─────────────────────────────────────────── */
+.tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: 20px;
+}
+.tabs button {
+  border: 0;
+  background: none;
+  padding: 8px 14px 10px;
+  color: var(--ink-soft);
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+}
+.tabs button[aria-selected='true'] {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.auth-form label {
+  font-size: 12px;
+  color: var(--ink-soft);
+  margin-top: 10px;
+}
+.hint-inline {
+  color: var(--ink-faint);
+}
+.auth-form input {
+  font: inherit;
+  padding: 9px 11px;
+  border: 1px solid var(--rule-strong);
+  background: var(--paper-raised);
+  color: var(--ink);
+  border-radius: 3px;
+}
+.auth-form input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.auth-form button {
+  margin-top: 18px;
+  padding: 10px;
+}
+
+.notice {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  padding: 12px 15px;
+  margin-top: 18px;
+  font-size: 13.5px;
+  color: var(--accent);
+}
+
+/* ── Barra superior con sesión ─────────────────────────────────────── */
+.topbar {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 16px;
+	flex-wrap: wrap;
+}
+.topbar .brand {
+	margin-bottom: 26px;
+}
+
+.who {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	font-size: 12.5px;
+}
+.who .email {
+	color: var(--ink-soft);
+}
+.who .role {
+	border: 1px solid var(--rule-strong);
+	border-radius: 999px;
+	padding: 1px 9px 2px;
+	color: var(--ink-faint);
+	font-size: 11px;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.ghost {
+	font: inherit;
+	font-size: 12.5px;
+	padding: 5px 12px;
+	border: 1px solid var(--rule-strong);
+	border-radius: 3px;
+	background: var(--paper);
+	color: var(--ink);
+	text-decoration: none;
+	cursor: pointer;
+}
+.ghost:hover {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+.ghost:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+
+.banner {
+	border-left: 3px solid var(--warn);
+	background: var(--warn-soft);
+	padding: 12px 15px;
+	margin-bottom: 20px;
+	font-size: 13.5px;
+	color: var(--ink);
+}

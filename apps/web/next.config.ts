@@ -4,7 +4,7 @@ import type { NextConfig } from 'next'
 const config: NextConfig = {
   // Los paquetes del workspace se compilan con el resto de la app en vez de
   // consumirse desde dist. Evita tener que recordar el orden de build.
-  transpilePackages: ['@moneypilot/core', '@moneypilot/importers'],
+  transpilePackages: ['@moneypilot/core', '@moneypilot/importers', '@moneypilot/db'],
 
   // En un monorepo Next infiere la raíz del workspace y a veces se equivoca:
   // si acierta de más, empaqueta medio repositorio en cada función; si acierta

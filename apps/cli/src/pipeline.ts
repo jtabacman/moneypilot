@@ -21,14 +21,7 @@ import {
   type TransferPair,
   totalMovements,
 } from '@moneypilot/core'
-import {
-  detectFormat,
-  inspectCsv,
-  parseCsv,
-  parseN43,
-  parseOfx,
-  parseQif,
-} from '@moneypilot/importers'
+import { detectFormat, parseCsv, parseN43, parseOfx, parseQif } from '@moneypilot/importers'
 
 export interface PipelineOptions {
   readonly fileName: string

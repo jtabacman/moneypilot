@@ -4,8 +4,10 @@ dist/
 next-env.d.ts
 .vercel/
 *.tsbuildinfo
-.env
-.env.local
+# Todo lo que empiece por .env: `vercel env pull` escribe credenciales acá.
+# El ejemplo sin valores sí se versiona.
+.env*
+!.env.example
 coverage/
 .DS_Store
 .vitest/

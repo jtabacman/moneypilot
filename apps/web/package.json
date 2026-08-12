@@ -4,16 +4,20 @@
   "private": true,
   "scripts": {
     "dev": "next dev --port 3000",
-    "build": "tsc -b ../../packages/core ../../packages/importers && next build",
+    "build": "tsc -b ../../packages/core ../../packages/importers ../../packages/db && node scripts/migrate.mjs && next build",
+    "db:deploy": "node scripts/migrate.mjs",
     "start": "next start"
   },
   "dependencies": {
     "@moneypilot/core": "workspace:*",
     "@moneypilot/importers": "workspace:*",
+    "@supabase/ssr": "^0.12.4",
+    "@supabase/supabase-js": "^2.112.3",
     "next": "^15.5.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "server-only": "^0.0.1"
+    "server-only": "^0.0.1",
+    "@moneypilot/db": "workspace:*"
   },
   "devDependencies": {
     "@types/react": "^19.2.2",
