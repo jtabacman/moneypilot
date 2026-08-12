@@ -1,0 +1,21 @@
+{
+  "name": "@moneypilot/web",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "tsc -b ../../packages/core ../../packages/importers && next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@moneypilot/core": "workspace:*",
+    "@moneypilot/importers": "workspace:*",
+    "next": "^15.5.4",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.1"
+  }
+}

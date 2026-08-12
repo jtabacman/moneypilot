@@ -4,3 +4,5 @@ packages:
 allowBuilds:
   # Vitest lo necesita compilado.
   esbuild: true
+  # Next lo usa para optimizar imagenes.
+  sharp: true
