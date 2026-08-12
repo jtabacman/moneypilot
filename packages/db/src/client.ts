@@ -184,3 +184,47 @@ export async function withoutTenantScope<T>(
     client.release()
   }
 }
+
+/**
+ * Alcance de **persona** sin alcance de hogar: para el único momento en que
+ * alguien está autenticado pero todavía no sabemos a qué hogar pertenece.
+ *
+ * Es el caso de la pantalla de entrada. Se podría resolver con
+ * `withoutTenantScope` y un `where user_id = $1`, y funcionaría — pero en
+ * Supabase esa conexión entra como `postgres`, que se saltea RLS, y entonces
+ * lo único que separa a un hogar de otro es que ese `where` esté bien
+ * escrito. Acá, en cambio, el filtro lo aplica la policy `membership_own`:
+ * aunque la consulta se olvide la condición, Postgres no devuelve de más.
+ *
+ * `provision_household` sigue funcionando porque es SECURITY DEFINER: crea el
+ * hogar y la membresía por encima de RLS, que es justamente su razón de ser.
+ */
+export async function withUserScope<T>(
+  db: Db,
+  userId: string,
+  fn: (client: TenantClient) => Promise<T>,
+  options: Pick<TenantScopeOptions, 'role'> = {},
+): Promise<T> {
+  if (!UUID_RE.test(userId)) {
+    throw new TenantScopeError(`userId inválido: ${JSON.stringify(userId)}`)
+  }
+
+  const client = await db.connect()
+  try {
+    await client.query('begin')
+    await assumeAppRole(client, options.role)
+    await client.query('select set_config($1, $2, true)', ['app.user_id', userId])
+    const result = await fn(client)
+    await client.query('commit')
+    return result
+  } catch (error) {
+    try {
+      await client.query('rollback')
+    } catch {
+      // La transacción ya estaba abortada; el error original es el que importa.
+    }
+    throw error
+  } finally {
+    client.release()
+  }
+}

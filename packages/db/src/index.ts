@@ -12,6 +12,7 @@ export {
   TenantScopeError,
   withoutTenantScope,
   withTenant,
+  withUserScope,
 } from './client.js'
 export type { ClientConfig, TlsOptions } from './connection.js'
 export { ConnectionStringError, SUPABASE_ROOT_CA_2021, toClientConfig } from './connection.js'

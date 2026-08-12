@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { hasDatabase, hasSupabaseAuth } from '../lib/env'
-import { currentSession, type Session } from '../lib/session'
+import { resolveSession, type SessionState } from '../lib/session'
 import { signOut } from './entrar/actions'
 import { Importer } from './importer'
 
@@ -10,6 +10,8 @@ import { Importer } from './importer'
  */
 export const dynamic = 'force-dynamic'
 
+const ANONYMOUS: SessionState = { kind: 'anonymous' }
+
 /**
  * La sesión no puede tumbar la página.
  *
@@ -18,19 +20,22 @@ export const dynamic = 'force-dynamic'
  * porque no guarda nada. Es la diferencia entre "no podés entrar" y "la web
  * está caída", y para un producto que todavía se está enseñando, importa.
  */
-async function safeSession(): Promise<{ session: Session | null; failure: string | null }> {
-  if (!hasSupabaseAuth() || !hasDatabase()) return { session: null, failure: null }
+async function safeSession(): Promise<{ state: SessionState; failure: boolean }> {
+  if (!hasSupabaseAuth() || !hasDatabase()) return { state: ANONYMOUS, failure: false }
   try {
-    return { session: await currentSession(), failure: null }
+    return { state: await resolveSession(), failure: false }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    console.error('[moneypilot] no se pudo resolver la sesión:', message)
-    return { session: null, failure: message }
+    console.error(
+      '[moneypilot] no se pudo resolver la sesión:',
+      error instanceof Error ? error.message : String(error),
+    )
+    return { state: ANONYMOUS, failure: true }
   }
 }
 
 export default async function Page() {
-  const { session, failure } = await safeSession()
+  const { state, failure } = await safeSession()
+  const session = state.kind === 'active' ? state.session : null
 
   return (
     <main className="shell">
@@ -41,20 +46,20 @@ export default async function Page() {
         </div>
 
         {session === null ? (
-          hasSupabaseAuth() && (
-            <Link href="/entrar" className="ghost">
-              Entrar
-            </Link>
+          state.kind === 'expired' ? (
+            <SignOutButton label="Salir" />
+          ) : (
+            hasSupabaseAuth() && (
+              <Link href="/entrar" className="ghost">
+                Entrar
+              </Link>
+            )
           )
         ) : (
           <div className="who">
             <span className="email">{session.user.email ?? 'sin correo'}</span>
             <span className="role">{session.role}</span>
-            <form action={signOut}>
-              <button type="submit" className="ghost">
-                Salir
-              </button>
-            </form>
+            <SignOutButton label="Salir" />
           </div>
         )}
       </header>
@@ -68,7 +73,15 @@ export default async function Page() {
           : 'Todavía nada se guarda: por ahora el informe se calcula y se descarta.'}
       </p>
 
-      {failure !== null && (
+      {state.kind === 'expired' && (
+        <div className="banner" role="status">
+          <b>Tu acceso a este hogar caducó.</b> Entraste bien, pero la invitación tenía fecha de
+          fin. Pedile al titular que la renueve. Mientras tanto podés usar el importador, que no
+          guarda nada.
+        </div>
+      )}
+
+      {failure && (
         <div className="banner" role="status">
           <b>Estás viendo la versión sin cuenta.</b> No se pudo resolver la sesión contra la base de
           datos. El importador funciona igual porque no necesita guardar nada.
@@ -89,5 +102,15 @@ export default async function Page() {
         tautología. Cuando no se puede verificar, se dice.
       </p>
     </main>
+  )
+}
+
+function SignOutButton({ label }: { label: string }) {
+  return (
+    <form action={signOut}>
+      <button type="submit" className="ghost">
+        {label}
+      </button>
+    </form>
   )
 }
