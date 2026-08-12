@@ -149,7 +149,36 @@ describe('informe de importación', () => {
     expect(output).toContain('BBVA Corriente')
     expect(output).toContain('857.50 EUR')
     expect(output).toContain('0.00 EUR')
-    expect(output).toContain('todas las cuentas cuadran')
+    expect(output).toContain('1 de 1 cuenta(s) verificadas')
+  })
+
+  it('no dice que todo cuadra cuando no hubo nada contra qué cuadrar', () => {
+    // Un extracto sin saldos declarados (OFX, QIF, la mayoría de los CSV) no
+    // se puede verificar con el fichero solo. Decir "cuadra" ahí es la misma
+    // falsa tranquilidad que declarar éxito sin haber leído una fila.
+    const output = renderImportReport(
+      baseReport({
+        accounts: [
+          reconcileAccount({
+            accountId: 'a1',
+            accountLabel: 'Chase Checking',
+            currency: EUR,
+            movements: eur('-142.50'),
+            linesImported: 115,
+          }),
+        ],
+      }),
+    )
+    expect(output).toContain('NINGUNA cuenta se pudo verificar')
+    expect(output).not.toContain('cuadran')
+  })
+
+  it('un fichero sin transacciones no es una importación exitosa', () => {
+    // El peor modo de fallo del producto: declarar que todo salió bien
+    // cuando no pasó nada. La ausencia no se ve; hay que declararla.
+    const empty = baseReport({ linesRead: 0, imported: 0, duplicates: 0, needsReview: 0 })
+    expect(importReportIsClean(empty)).toBe(false)
+    expect(renderImportReport(empty)).toContain('no contenía ninguna transacción legible')
   })
 
   it('el render declara los problemas en vez de esconderlos', () => {

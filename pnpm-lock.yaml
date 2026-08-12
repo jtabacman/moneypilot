@@ -21,6 +21,18 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@24.13.3)
 
+  apps/cli:
+    dependencies:
+      '@moneypilot/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@moneypilot/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@moneypilot/importers':
+        specifier: workspace:*
+        version: link:../../packages/importers
+
   packages/core:
     dependencies:
       uuidv7:

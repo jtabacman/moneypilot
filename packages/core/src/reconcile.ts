@@ -120,10 +120,26 @@ export interface ImportReport {
   readonly periodTo: PlainDate | null
 }
 
+/**
+ * Un informe está limpio sólo si además **leyó algo**.
+ *
+ * Sin esa condición, un fichero de un formato no soportado —o uno vacío— sale
+ * con cero filas, cero rechazos y cero deltas, y el informe declara que todo
+ * cuadra. Es la peor forma de fallar de este producto: dice que salió bien
+ * cuando no pasó nada. La ausencia no se ve; hay que declararla.
+ */
 export function importReportIsClean(report: ImportReport): boolean {
   return (
-    report.rejected.length === 0 && report.accounts.every((account) => account.status !== 'delta')
+    report.linesRead > 0 &&
+    report.imported + report.duplicates + report.needsReview > 0 &&
+    report.rejected.length === 0 &&
+    report.accounts.every((account) => account.status !== 'delta')
   )
+}
+
+/** true si el fichero se reconoció pero no produjo ni una sola fila. */
+export function importReportIsEmpty(report: ImportReport): boolean {
+  return report.linesRead === 0
 }
 
 /** Cuentas cuyo saldo no cuadra. Es la lista que hay que resolver antes de cerrar. */
@@ -216,8 +232,23 @@ export function renderImportReport(report: ImportReport): string {
 
   const deltas = accountsWithDelta(report)
   lines.push(rule)
-  if (importReportIsClean(report)) {
-    lines.push('RESULTADO: todas las cuentas cuadran y no hubo filas rechazadas.')
+  if (importReportIsEmpty(report)) {
+    lines.push('RESULTADO: el fichero se reconoció pero no contenía ninguna transacción legible.')
+    lines.push('Revisá los avisos de arriba: puede ser un subtipo no soportado o un fichero vacío.')
+  } else if (importReportIsClean(report)) {
+    const verified = report.accounts.filter((a) => a.status === 'conciliada').length
+    if (verified === 0) {
+      // Decir "cuadra" cuando no había nada contra qué cuadrar es la misma
+      // falsa tranquilidad que declarar éxito sin haber leído una fila.
+      lines.push('RESULTADO: sin filas rechazadas, pero NINGUNA cuenta se pudo verificar.')
+      lines.push('El fichero no declara saldos, así que la conciliación queda pendiente de')
+      lines.push('contrastar contra el histórico ya cargado o contra el saldo real del banco.')
+    } else {
+      lines.push(
+        `RESULTADO: ${verified} de ${report.accounts.length} cuenta(s) verificadas contra el ` +
+          'saldo del banco, sin filas rechazadas.',
+      )
+    }
   } else {
     const parts: string[] = []
     if (deltas.length > 0) parts.push(`${deltas.length} cuenta(s) con delta`)

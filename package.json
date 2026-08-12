@@ -19,7 +19,7 @@
     "db:down": "bash scripts/dev-db.sh down",
     "db:reset": "bash scripts/dev-db.sh destroy && pnpm db:up",
     "db:migrate": "pnpm --filter @moneypilot/db migrate",
-    "cli": "pnpm --filter @moneypilot/cli start"
+    "cli": "tsc -b && node apps/cli/dist/main.js"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.2",
