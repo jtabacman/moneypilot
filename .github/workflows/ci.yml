@@ -12,6 +12,29 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
+
+    # Los tests de aislamiento necesitan una base real. Simularlos no sirve:
+    # el punto es comprobar que Postgres aplica las policies, no que nuestro
+    # código cree que las aplica.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: moneypilot
+          POSTGRES_PASSWORD: moneypilot
+          POSTGRES_DB: moneypilot
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U moneypilot"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+
+    env:
+      DATABASE_URL: postgres://moneypilot:moneypilot@localhost:55432/moneypilot
+      DATABASE_APP_URL: postgres://moneypilot_app:moneypilot_app@localhost:55432/moneypilot
+
     steps:
       - uses: actions/checkout@v5
 
@@ -35,6 +58,17 @@ jobs:
 
       - name: Typecheck
         run: pnpm exec tsc -b
+
+      - name: Migraciones
+        run: pnpm db:migrate
+
+      # La migración crea el rol sin login a propósito. Acá se le da una
+      # contraseña efímera, igual que en desarrollo local.
+      - name: Rol de aplicación
+        run: |
+          PGPASSWORD=moneypilot psql -h localhost -p 55432 -U moneypilot -d moneypilot \
+            -v ON_ERROR_STOP=1 \
+            -c "alter role moneypilot_app login password 'moneypilot_app'"
 
       - name: Tests
         run: pnpm test

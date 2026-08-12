@@ -15,9 +15,9 @@
     "test:watch": "vitest",
     "check": "node scripts/check-control-chars.mjs && biome check . && tsc -b",
     "fix": "biome check --write .",
-    "db:up": "docker compose up -d && docker compose exec -T db sh -c 'until pg_isready -U moneypilot -q; do sleep 0.3; done' && echo 'postgres listo'",
-    "db:down": "docker compose down",
-    "db:reset": "docker compose down -v && pnpm db:up && pnpm db:migrate",
+    "db:up": "bash scripts/dev-db.sh up && pnpm db:migrate && bash scripts/dev-db.sh role",
+    "db:down": "bash scripts/dev-db.sh down",
+    "db:reset": "bash scripts/dev-db.sh destroy && pnpm db:up",
     "db:migrate": "pnpm --filter @moneypilot/db migrate",
     "cli": "pnpm --filter @moneypilot/cli start"
   },
