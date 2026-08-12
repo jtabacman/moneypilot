@@ -1,0 +1,30 @@
+{
+  "name": "moneypilot",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.0.9",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "node scripts/check-control-chars.mjs && biome check . && tsc -b",
+    "fix": "biome check --write .",
+    "db:up": "docker compose up -d && docker compose exec -T db sh -c 'until pg_isready -U moneypilot -q; do sleep 0.3; done' && echo 'postgres listo'",
+    "db:down": "docker compose down",
+    "db:reset": "docker compose down -v && pnpm db:up && pnpm db:migrate",
+    "db:migrate": "pnpm --filter @moneypilot/db migrate",
+    "cli": "pnpm --filter @moneypilot/cli start"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.3.2",
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

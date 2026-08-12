@@ -1,0 +1,6 @@
+packages:
+  - "packages/*"
+  - "apps/*"
+allowBuilds:
+  # Vitest lo necesita compilado.
+  esbuild: true
