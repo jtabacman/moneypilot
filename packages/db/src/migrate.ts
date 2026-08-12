@@ -17,6 +17,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import pg from 'pg'
+import { toClientConfig } from './connection.js'
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../migrations', import.meta.url))
 
@@ -26,7 +27,8 @@ export interface MigrateResult {
 }
 
 export async function migrate(connectionString: string): Promise<MigrateResult> {
-  const client = new pg.Client({ connectionString })
+  // Campos sueltos y no `connectionString`: ver connection.ts.
+  const client = new pg.Client(toClientConfig(connectionString))
   await client.connect()
 
   try {

@@ -13,6 +13,8 @@ export {
   withoutTenantScope,
   withTenant,
 } from './client.js'
+export type { ClientConfig, TlsOptions } from './connection.js'
+export { ConnectionStringError, SUPABASE_ROOT_CA_2021, toClientConfig } from './connection.js'
 
 /*
  * El corredor de migraciones NO se reexporta acá a propósito.

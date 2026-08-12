@@ -13,6 +13,7 @@
  */
 
 import pg from 'pg'
+import { toClientConfig } from './connection.js'
 
 export interface DbConfig {
   readonly connectionString: string
@@ -26,7 +27,10 @@ export type TenantClient = pg.PoolClient
 
 export function createPool(config: DbConfig): Db {
   return new pg.Pool({
-    connectionString: config.connectionString,
+    // Campos sueltos y no `connectionString`: cuando `pg` recibe la cadena,
+    // el `sslmode` que trae dentro pisa la configuración de TLS explícita.
+    // Ver el comentario largo en connection.ts.
+    ...toClientConfig(config.connectionString),
     max: config.max ?? 10,
     // Un tenant con una consulta pesada no puede degradar a los demás.
     statement_timeout: config.statementTimeoutMs ?? 15_000,
