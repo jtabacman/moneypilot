@@ -1,3 +1,5 @@
+export type { N43ParseOptions } from './n43/parse.js'
+export { parseN43 } from './n43/parse.js'
 export type { OfxParseOptions } from './ofx/parse.js'
 export { parseOfx, parseOfxDate } from './ofx/parse.js'
 export type { OfxNode } from './ofx/tokenize.js'
