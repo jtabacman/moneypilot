@@ -1,0 +1,86 @@
+/*
+ * Estilo propio de /reportes.
+ *
+ * Sólo lo que el sistema compartido no tiene: la tarjeta de plantilla. Todo lo
+ * demás —paneles, tiles, tabla, chips, estados— sale de globals.css, porque un
+ * catálogo de reportes que se ve distinto al resto de la aplicación le dice al
+ * usuario que es otra cosa, y no lo es.
+ */
+
+.cards {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+	gap: var(--s4);
+}
+
+.card {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s2);
+	border: 1px solid var(--rule);
+	border-radius: var(--radius);
+	background: var(--paper);
+	padding: var(--s4);
+}
+
+.cardHead {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: var(--s3);
+}
+
+/* La pregunta es el título. En serif porque es lo que se lee, no lo que se
+   escanea: el resto de la tarjeta es dato y va en sans. */
+.question {
+	font-family: var(--serif);
+	font-size: var(--t-lead);
+	line-height: 1.28;
+	margin: 0;
+}
+
+.why {
+	margin: 0;
+	font-size: var(--t-small);
+	color: var(--ink-soft);
+}
+
+/* El estado de hoy, con datos de verdad. Va pegado abajo para que las
+   tarjetas de una fila alineen sus cifras aunque el texto mida distinto. */
+.preview {
+	margin-top: auto;
+	padding-top: var(--s3);
+	border-top: 1px dashed var(--rule-strong);
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+}
+
+.previewRow {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: var(--s3);
+	font-size: var(--t-small);
+}
+
+.previewRow > span:first-child {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.falta {
+	font-size: var(--t-mini);
+	color: var(--ink-faint);
+	line-height: 1.45;
+	margin: 0;
+}
+
+.actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--s2);
+	padding-top: var(--s1);
+}

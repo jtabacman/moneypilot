@@ -1,0 +1,38 @@
+/*
+ * Lo propio de /hoy. Dos reglas, y las dos existen porque globals.css lo
+ * comparten doce pantallas y no le tocamos nada.
+ */
+
+/*
+ * Cabecera de columna que no lleva texto visible —la de la acción, la del
+ * semáforo— pero que sí tiene que existir para quien navega la tabla con un
+ * lector de pantalla: un `<th>` vacío deja esa columna sin nombre.
+ */
+.oculto {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
+
+/*
+ * La cifra de un tile, cuando además es el enlace al registro. Hereda el
+ * tamaño y la tipografía de `.tile .v` en vez de pintarse de azul: lo que se
+ * lee tiene que seguir siendo el número, no el hecho de que sea un enlace.
+ */
+.cifra {
+	color: inherit;
+	text-decoration: none;
+	border-bottom: 1px dotted var(--rule-strong, var(--rule));
+}
+
+.cifra:hover,
+.cifra:focus-visible {
+	color: var(--accent);
+	border-bottom-color: currentColor;
+}

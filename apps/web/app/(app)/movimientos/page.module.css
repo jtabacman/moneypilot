@@ -1,0 +1,129 @@
+/*
+ * Lo propio de /movimientos. Todo lo demás sale de globals.css: acá sólo vive
+ * lo que ninguna otra pantalla necesita —el formulario plegable, el pivote de
+ * las celdas y la marca del traspaso—, porque una regla que se comparte con
+ * doce pantallas no puede vivir en la carpeta de una.
+ */
+
+/* ── Formulario plegable ─────────────────────────────────────────────────── */
+
+.sumario {
+	cursor: pointer;
+	list-style: none;
+	user-select: none;
+}
+.sumario::-webkit-details-marker {
+	display: none;
+}
+/* El triángulo propio: `display: flex` en el summary se come el nativo. */
+.sumario::after {
+	content: "▾";
+	margin-left: auto;
+	color: var(--ink-faint);
+	font-size: var(--t-small);
+	transition: transform 0.12s;
+}
+details[open] > .sumario::after {
+	transform: rotate(180deg);
+}
+.sumario:hover h2 {
+	color: var(--accent);
+}
+
+.formulario {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+	gap: var(--s4);
+	align-items: start;
+}
+
+.campo {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+	min-width: 0;
+}
+.campo select,
+.campo input {
+	width: 100%;
+	min-width: 0;
+}
+/* Las listas múltiples se apoyan en `size`, pero un alto máximo evita que tres
+   docenas de categorías empujen el botón de aplicar fuera de la pantalla. */
+.campo select[multiple] {
+	max-height: 190px;
+	padding: 4px;
+	font-size: var(--t-mini);
+}
+.campo select[multiple] option {
+	padding: 2px 4px;
+}
+
+.acciones {
+	grid-column: 1 / -1;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--s3);
+	flex-wrap: wrap;
+	border-top: 1px solid var(--rule);
+	padding-top: var(--s3);
+}
+
+/* ── Tabla ───────────────────────────────────────────────────────────────── */
+
+/*
+ * Un enlace dentro de una celda no puede ir en verde acento: veinte filas por
+ * cinco columnas serían cien manchas de color y el ojo dejaría de ver el
+ * dinero, que es lo único que esta tabla existe para mostrar. Se comporta como
+ * enlace al pasar por encima.
+ */
+.pivote {
+	color: inherit;
+	text-decoration: none;
+	border-bottom: 1px dotted var(--rule-strong);
+}
+.pivote:hover {
+	color: var(--accent);
+	border-bottom-color: var(--accent);
+}
+
+.descripcion {
+	display: flex;
+	align-items: center;
+	gap: var(--s2);
+	flex-wrap: wrap;
+}
+
+/*
+ * El traspaso se distingue sin gritar: la fila baja de tono y lleva una barra
+ * en el canto. No se pinta de color de estado porque no es un problema — es
+ * plata tuya que cambió de bolsillo.
+ */
+.traspaso td {
+	color: var(--ink-soft);
+}
+.traspaso td:first-child {
+	box-shadow: inset 3px 0 0 var(--rule-strong);
+}
+
+/* ── Chips de filtro activo ──────────────────────────────────────────────── */
+
+.quitar {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	text-decoration: none;
+}
+
+.oculto {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}

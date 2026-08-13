@@ -1,0 +1,79 @@
+/*
+ * Estilos propios de /cuentas. Lo que se pudo resolver con las clases de
+ * globals.css está resuelto ahí: acá sólo queda lo que no existe en el sistema
+ * —la fila que abre grupo de institución y el plegado de las cuentas de
+ * sistema— para no engordar una hoja que comparten doce pantallas.
+ */
+
+/*
+ * La institución abre grupo dentro de la misma tabla, en vez de partirla en
+ * una tabla por banco: las columnas de dinero tienen que alinearse en vertical
+ * de arriba abajo de la sección, que es lo que permite leerlas de un vistazo.
+ */
+.group th {
+	background: var(--paper-sunken);
+	color: var(--ink);
+	font-family: var(--sans);
+	font-size: var(--t-mini);
+	text-transform: none;
+	letter-spacing: 0;
+	font-weight: 600;
+	border-bottom: 1px solid var(--rule);
+	border-top: 1px solid var(--rule);
+	padding: 6px var(--s3);
+}
+
+.groupCount {
+	color: var(--ink-faint);
+	font-weight: 400;
+	margin-left: 7px;
+}
+
+/* Cuentas de sistema: plegadas, porque no son del usuario. */
+.system summary {
+	cursor: pointer;
+	padding: var(--s3) var(--s4);
+	font-size: var(--t-small);
+	color: var(--ink-soft);
+}
+
+.system summary::marker {
+	color: var(--ink-faint);
+}
+
+.system summary:hover {
+	background: var(--paper-sunken);
+}
+
+.system summary b {
+	color: var(--ink);
+	font-family: var(--serif);
+	font-size: var(--t-h4);
+	font-weight: 600;
+}
+
+.why {
+	padding: 0 var(--s4) var(--s3);
+	margin: 0;
+	font-size: var(--t-small);
+	color: var(--ink-soft);
+	max-width: 84ch;
+}
+
+/* Los subtotales del pie: uno por moneda, nunca uno solo. */
+.totals {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--s2) var(--s5);
+	margin-bottom: 5px;
+}
+
+.totals b {
+	color: var(--ink);
+	font-weight: 600;
+	margin-right: 7px;
+}
+
+.closed {
+	margin-left: 7px;
+}

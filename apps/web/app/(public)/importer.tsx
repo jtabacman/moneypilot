@@ -201,7 +201,15 @@ export function Importer() {
   )
 }
 
-function Report({
+/**
+ * El informe de una importación.
+ *
+ * Se exporta porque el importador con sesión (/importar) tiene que enseñar
+ * exactamente el mismo informe que el anónimo: si el de adentro y el de afuera
+ * se vieran distinto, la promesa de "mirá antes de guardar" no valdría nada —
+ * lo que mirás en /probar no sería lo que después vas a guardar.
+ */
+export function Report({
   report,
   review,
   transfers,

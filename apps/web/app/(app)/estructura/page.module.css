@@ -1,0 +1,243 @@
+/*
+ * Estilos propios de /estructura.
+ *
+ * El waterfall y la serie de patrimonio existen sólo en esta pantalla, así que
+ * viven acá y no en globals.css: una clase `.bar` compartida por doce páginas
+ * es una clase que alguien va a redefinir sin enterarse.
+ *
+ * Los dos gráficos usan el mismo carril y la misma aritmética —posición y alto
+ * en porcentaje sobre un `--lo`/`--span` común— para que una barra de la serie
+ * y una del waterfall se puedan comparar a ojo sin que engañen.
+ */
+
+/* ── Waterfall de variación ──────────────────────────────────────────── */
+
+.waterfall {
+	display: grid;
+	/* Siempre en una fila: un waterfall que se parte en dos líneas deja de
+	   leerse como una cuenta y pasa a ser seis barras sueltas. */
+	grid-auto-flow: column;
+	grid-auto-columns: minmax(0, 1fr);
+	gap: var(--s2);
+	padding: var(--s4) 0 0;
+}
+
+.col {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 0;
+	text-decoration: none;
+	color: inherit;
+}
+a.col:hover .track {
+	box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+a.col:hover .label {
+	color: var(--accent);
+}
+
+.value {
+	display: block;
+	font-family: var(--mono);
+	font-variant-numeric: tabular-nums;
+	font-size: var(--t-mini);
+	color: var(--ink-soft);
+	text-align: center;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.track {
+	position: relative;
+	display: block;
+	height: 132px;
+	background: var(--bar);
+	border-radius: 2px;
+}
+
+/* La línea del cero. Sólo se dibuja cuando algún nivel es negativo: si todo
+   está por encima, el cero es el suelo del carril y una línea ahí sobra. */
+.zero {
+	position: absolute;
+	left: 0;
+	right: 0;
+	height: 1px;
+	background: var(--rule-strong);
+}
+
+.bar {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: var(--bottom);
+	height: var(--height);
+	border-radius: 1px;
+}
+.total {
+	background: var(--ink);
+}
+.up {
+	background: var(--ok);
+}
+.down {
+	background: var(--bad);
+}
+/* El efecto FX no es ni bueno ni malo: es el eje del reporte, y por eso lleva
+   su propio color en vez de confundirse con una pérdida. */
+.fx {
+	background: repeating-linear-gradient(
+		135deg,
+		var(--demo) 0 4px,
+		color-mix(in oklab, var(--demo) 55%, var(--paper)) 4px 8px
+	);
+}
+
+/*
+ * Efecto FX que todavía no se modela.
+ *
+ * No es una barra de altura cero: una barra en cero se lee como "no hubo
+ * efecto cambiario", y lo que pasa es que nadie lo calculó. El carril vacío y
+ * rayado dice lo segundo.
+ */
+.unmodelled {
+	position: absolute;
+	inset: 0;
+	border: 1px dashed var(--rule-strong);
+	border-radius: 2px;
+	background: repeating-linear-gradient(
+		135deg,
+		transparent 0 5px,
+		var(--rule) 5px 6px
+	);
+}
+
+.label {
+	font-size: var(--t-micro);
+	color: var(--ink-faint);
+	text-align: center;
+	text-transform: uppercase;
+	letter-spacing: 0.07em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* ── Serie de patrimonio ─────────────────────────────────────────────── */
+
+.series {
+	display: grid;
+	grid-auto-flow: column;
+	grid-auto-columns: minmax(0, 1fr);
+	gap: 3px;
+}
+.month {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+	min-width: 0;
+	text-decoration: none;
+	color: inherit;
+}
+a.month:hover .track {
+	box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+a.month:hover .label {
+	color: var(--accent);
+}
+.net {
+	background: var(--accent);
+}
+/* La deuda se apila encima del patrimonio neto, así que el alto total de la
+   columna es el activo. No es decoración: es la identidad activo = neto +
+   deuda, dibujada. */
+.debt {
+	background: color-mix(in oklab, var(--bad) 45%, var(--paper));
+}
+
+/* ── Tablas agrupadas por moneda ─────────────────────────────────────── */
+
+/*
+ * Una fila de grupo por moneda, con su subtotal.
+ *
+ * Consolidar las monedas en un total único sería mentir —tener 50.000 EUR y
+ * −50.000 USD no es tener cero— así que la tabla no tiene un total general y
+ * el subtotal por moneda es el número más agregado que existe acá.
+ */
+.group td {
+	background: var(--paper-sunken);
+	border-bottom: 1px solid var(--rule-strong);
+	border-top: 1px solid var(--rule-strong);
+	font-weight: 600;
+	font-size: var(--t-mini);
+	text-transform: uppercase;
+	letter-spacing: 0.09em;
+	color: var(--ink-soft);
+}
+.subtotal td {
+	background: var(--paper-raised);
+	border-bottom: 1px solid var(--rule-strong);
+	font-weight: 600;
+}
+
+/* ── Enlace de un KPI ────────────────────────────────────────────────── */
+
+/*
+ * La cifra de un tile se puede abrir, pero no se pinta de verde: cuatro
+ * números enormes en color de enlace convierten la fila de KPI en una barra de
+ * navegación. El accent aparece al pasar por encima, que es cuando hace falta.
+ */
+.tileLink {
+	color: inherit;
+	text-decoration: none;
+}
+.tileLink:hover {
+	color: var(--accent);
+	text-decoration: underline;
+	text-decoration-thickness: 1px;
+	text-underline-offset: 3px;
+}
+
+/* Segunda línea dentro de una celda: la cuenta bajo el comercio, los días
+   exactos bajo la frecuencia. */
+.under {
+	display: block;
+	font-size: var(--t-mini);
+	color: var(--ink-faint);
+	margin-top: 1px;
+}
+
+/* ── Aviso del efecto FX sin modelar ─────────────────────────────────── */
+
+/*
+ * Franja a lo ancho del panel, entre el gráfico y la nota metodológica.
+ *
+ * Va con el peso de una advertencia y no con el de una nota al pie porque es
+ * el hueco central del reporte: quien mira este waterfall vino justamente a
+ * ver cuánto de su variación fue tipo de cambio.
+ */
+.fxWarning {
+	padding: var(--s3) var(--s4);
+	border-top: 1px solid var(--rule);
+	border-left: 3px solid var(--warn);
+	background: var(--warn-soft);
+	color: var(--ink);
+	font-size: var(--t-small);
+}
+.fxWarning b {
+	color: var(--warn);
+	font-weight: 600;
+}
+.fxWarning code {
+	font-family: var(--mono);
+	font-size: var(--t-mini);
+	background: color-mix(in oklab, var(--warn) 12%, transparent);
+	padding: 1px 4px;
+	border-radius: 2px;
+}
+
+/* Segundo párrafo de la nota metodológica. */
+.second {
+	margin-top: 6px;
+}

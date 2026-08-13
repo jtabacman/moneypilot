@@ -26,8 +26,8 @@ export default function Landing() {
           </h1>
           <p className={styles.heroLede}>
             Un CFO no elige tus inversiones: ordena el dinero, dice cuánto cuesta cada cosa y arma
-            el cierre. Eso es lo que hacemos —{' '}
-            <Link href="/limites">y esto es lo que no</Link>, en una lista cerrada.
+            el cierre. Eso es lo que hacemos — <Link href="/limites">y esto es lo que no</Link>, en
+            una lista cerrada.
           </p>
           <div className={styles.heroCta}>
             <Link href="/probar" className="btn primary big">

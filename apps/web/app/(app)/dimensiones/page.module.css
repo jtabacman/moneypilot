@@ -1,0 +1,54 @@
+/*
+ * Estilos propios de /dimensiones. Sólo lo que globals.css no tiene: los dos
+ * formularios y la sangría de la jerarquía. Todo lo demás sale del sistema.
+ */
+
+.form {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--s3);
+	align-items: flex-end;
+}
+
+.field {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+
+.field input,
+.field select {
+	min-width: 210px;
+}
+
+.rowForm {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--s2);
+	align-items: center;
+}
+
+.rowForm input {
+	min-width: 200px;
+}
+
+.rowForm form {
+	display: contents;
+}
+
+/* El formulario de alta cierra el panel, separado de la tabla por un filete. */
+.formBody {
+	padding: var(--s4);
+	border-top: 1px solid var(--rule);
+}
+
+/*
+ * La sangría de la jerarquía va con un filete a la izquierda y no sólo con
+ * espacio: "Casa Madrid · Obra" tiene que leerse como parte de Casa Madrid
+ * aunque la fila de al lado esté rayada.
+ */
+.child {
+	border-left: 1px solid var(--rule-strong);
+	padding-left: var(--s3);
+	display: inline-block;
+}

@@ -469,6 +469,11 @@ export function LiquiditySpecimen() {
       <div className={styles.specimenBody}>
         {LANES.map((lane) => {
           const max = Math.max(...lane.weeks)
+          // La semana es la identidad de cada barra, así que se materializa en
+          // vez de usar el índice: la posición y el número de semana coinciden
+          // hoy por casualidad, y el día que la serie empiece en otra semana
+          // dejarían de coincidir sin que nada avise.
+          const semanas = lane.weeks.map((valor, posicion) => ({ semana: posicion + 1, valor }))
           return (
             <div key={lane.currency} className={styles.lane}>
               <div className={styles.laneHead}>
@@ -477,14 +482,16 @@ export function LiquiditySpecimen() {
                 <span className="small faint">hoy</span>
               </div>
               <div className="bars" style={{ height: 74 }}>
-                {lane.weeks.map((value, index) => (
-                  <div className="col" key={`${lane.currency}-${index}`}>
+                {semanas.map(({ semana, valor }) => (
+                  <div className="col" key={`${lane.currency}-s${semana}`}>
                     <span
                       className="seg"
                       style={{
-                        height: `${(value / max) * 100}%`,
+                        height: `${(valor / max) * 100}%`,
                         background:
-                          lane.floor !== null && index >= lane.floor && index <= lane.floor + 1
+                          lane.floor !== null &&
+                          semana - 1 >= lane.floor &&
+                          semana - 1 <= lane.floor + 1
                             ? 'var(--warn)'
                             : undefined,
                       }}

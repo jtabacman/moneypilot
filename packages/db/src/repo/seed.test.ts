@@ -45,6 +45,7 @@ const HOUSEHOLDS = {
   resiembra: `${PREFIX} resiembra #${process.pid}`,
   limpieza: `${PREFIX} limpieza #${process.pid}`,
   vacio: `${PREFIX} vacío #${process.pid}`,
+  ventana: `${PREFIX} ventana corta #${process.pid}`,
 } as const
 
 suite('hogar de ejemplo', () => {
@@ -56,6 +57,7 @@ suite('hogar de ejemplo', () => {
     resiembra: '',
     limpieza: '',
     vacio: '',
+    ventana: '',
   }
   let seeded: SeedResult
 
@@ -374,6 +376,146 @@ suite('hogar de ejemplo', () => {
     expect(datos.sinBase?.n).toBe(0)
     expect(seeded.postingsWithoutBase).toBe(0)
   })
+
+  it('los importes en moneda de reporte también suman cero en cada asiento', async () => {
+    const descuadres = await inTenant(
+      'base',
+      async (client) =>
+        (
+          await client.query<{ description: string; total: string }>(
+            `select max(e.description) as description, sum(p.base_amount)::text as total
+             from posting p
+             join entry e on e.id = p.entry_id
+            group by p.entry_id
+           having sum(p.base_amount) <> 0`,
+          )
+        ).rows,
+    )
+
+    // El asiento balancea por moneda, pero los informes agregan `base_amount`.
+    // Si las patas de un mismo asiento se convirtieran con tasas distintas, el
+    // residuo aparecería como patrimonio que nadie tiene y no habría ninguna
+    // consulta que lo delatara.
+    expect(descuadres).toEqual([])
+  })
+
+  it('cada pata está en la moneda de su cuenta', async () => {
+    const mezcladas = await inTenant(
+      'base',
+      async (client) =>
+        (
+          await client.query<{ name: string; posting: string; cuenta: string }>(
+            `select a.name, p.currency as posting, a.currency as cuenta
+             from posting p join account a on a.id = p.account_id
+            where trim(p.currency) <> trim(a.currency)`,
+          )
+        ).rows,
+    )
+
+    // Sumar el saldo de una cuenta es sumar su columna `amount` sin mirar la
+    // moneda: eso sólo es correcto si esta consulta no devuelve nada. La
+    // reconciliación entera se apoya en este invariante.
+    expect(mezcladas).toEqual([])
+  })
+
+  it('los pesos de cada pata suman el 100% dentro de cada dimensión', async () => {
+    const rotos = await inTenant(
+      'base',
+      async (client) =>
+        (
+          await client.query<{ descripcion: string; dimension: string; suma: number }>(
+            `select max(e.description) as descripcion, d.key as dimension,
+                  sum(pd.weight_ppm)::int as suma
+             from posting_dimension pd
+             join dimension d on d.id = pd.dimension_id
+             join posting p   on p.id = pd.posting_id
+             join entry e     on e.id = p.entry_id
+            group by pd.posting_id, d.key
+           having sum(pd.weight_ppm) <> 1000000`,
+          )
+        ).rows,
+    )
+
+    // Un reparto que suma 90% imputa menos gasto del que hubo, y el que suma
+    // 110% inventa. En los dos casos el coste por propiedad deja de cerrar
+    // contra el total, que es lo primero que un cliente comprueba.
+    expect(rotos).toEqual([])
+  })
+
+  it('la evidencia de cada revisión describe el asiento al que apunta', async () => {
+    const filas = await inTenant(
+      'base',
+      async (client) =>
+        (
+          await client.query<{ kind: string; importe: string; real: string }>(
+            `select r.kind, r.evidence->>'importe' as importe, p.amount::text as real
+             from review_item r
+             join posting p on p.entry_id = r.entry_id and p.ordinal = 0
+            where r.evidence ? 'importe'`,
+          )
+        ).rows,
+    )
+
+    // La evidencia es lo que se le muestra a una persona para que decida. Un
+    // importe escrito a mano al lado del motivo se desincroniza del movimiento
+    // en cuanto alguien toca el generador, y nadie se entera.
+    expect(filas.length).toBeGreaterThanOrEqual(3)
+    for (const fila of filas) {
+      const declarado = BigInt(fila.importe.replace('.', '').replace('-', ''))
+      const real = BigInt(fila.real) < 0n ? -BigInt(fila.real) : BigInt(fila.real)
+      expect(declarado, `evidencia de ${fila.kind}`).toBe(real)
+    }
+  })
+
+  it('la serie que dejó de cobrarse no llega al último mes del histórico', async () => {
+    const rows = await inTenant('base', async (client) =>
+      (
+        await client.query<{ ultimo: string; corte: string }>(
+          `select max(booked_on) filter (where description = any($1::text[]))::text as ultimo,
+                  max(booked_on)::text as corte
+             from entry`,
+          [[...seeded.stoppedSeries]],
+        )
+      ).rows.at(0),
+    )
+
+    // Anunciar "esta serie dejó de cobrarse" es una afirmación sobre los datos.
+    // Si la serie llega hasta el último mes, la afirmación es falsa y el
+    // sembrado estaría inventando un hallazgo que la pantalla no puede mostrar.
+    expect(seeded.stoppedSeries.length).toBeGreaterThan(0)
+    expect((rows?.ultimo ?? '').slice(0, 7) < (rows?.corte ?? '').slice(0, 7)).toBe(true)
+  })
+
+  it('la tasa de cambio de un mes no depende de cuántos meses se siembren', async () => {
+    await inTenant('ventana', (client) => seedDemoHousehold(client, { asOf: AS_OF, months: 6 }))
+
+    const tasas = async (key: keyof typeof HOUSEHOLDS) =>
+      inTenant(
+        key,
+        async (client) =>
+          (
+            await client.query<{ mes: string; fraccion: string }>(
+              `select distinct to_char(fx_as_of, 'YYYY-MM') as mes,
+                    fx_numerator::text || '/' || fx_denominator::text as fraccion
+               from posting where fx_numerator is not null order by 1`,
+            )
+          ).rows,
+      )
+
+    const largo = new Map((await tasas('base')).map((r) => [r.mes, r.fraccion]))
+    const corto = await tasas('ventana')
+
+    // Cada posting guarda la fracción junto a `fx_as_of` y `fx_source`: eso
+    // afirma cuál era la tasa ESE DÍA. Si la tasa dependiera de la posición
+    // dentro del histórico, dos hogares sembrados con ventanas distintas se
+    // contradirían sobre el mismo hecho, y la tasa congelada dejaría de
+    // significar nada.
+    expect(corto.length).toBeGreaterThan(0)
+    for (const fila of corto) {
+      if (!largo.has(fila.mes)) continue
+      expect(largo.get(fila.mes), `tasa de ${fila.mes}`).toBe(fila.fraccion)
+    }
+  }, 180_000)
 
   it('las patas de una transferencia interna quedan marcadas como tales', async () => {
     const traspasos = await inTenant('base', async (client) =>

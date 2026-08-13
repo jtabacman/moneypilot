@@ -1,0 +1,42 @@
+/*
+ * Lo propio de /cierre. Todo lo demás sale de globals.css.
+ *
+ * La única decisión de peso acá es que la tabla de reconciliación se dibuja
+ * más grande que el resto de la página. No es jerarquía visual por gusto: es
+ * el bloque que decide si el mes está cerrado, y en el reporte impreso es lo
+ * primero que mira el contador.
+ */
+
+.recon table {
+	font-size: var(--t-body);
+}
+.recon td {
+	padding-top: 10px;
+	padding-bottom: 10px;
+}
+.recon .delta {
+	font-weight: 600;
+}
+
+/* Segunda línea de una celda: la fecha del extracto, el motivo, la moneda. */
+.note {
+	display: block;
+	font-size: var(--t-mini);
+	color: var(--ink-faint);
+	margin-top: 2px;
+	font-family: var(--sans);
+	letter-spacing: 0;
+}
+
+/* Valor de tile que es texto y no dinero: la moneda mono de `.tile dd` deja
+   ilegible una frase de cuatro palabras. */
+.text {
+	font-family: var(--sans);
+	font-size: var(--t-lead);
+	line-height: 1.25;
+	letter-spacing: -0.01em;
+}
+
+.name {
+	font-weight: 600;
+}

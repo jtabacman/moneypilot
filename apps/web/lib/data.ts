@@ -11,7 +11,7 @@ import 'server-only'
 
 import type { TenantClient } from '@moneypilot/db'
 import { withHousehold } from './db'
-import { type Session, resolveSession } from './session'
+import { resolveSession, type Session } from './session'
 
 export interface PageData<T> {
   readonly session: Session

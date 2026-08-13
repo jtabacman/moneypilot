@@ -1,0 +1,125 @@
+/*
+ * Estilo propio del constructor.
+ *
+ * Lo único que el sistema compartido no tiene: la fila de paso (rótulo a la
+ * izquierda, control a la derecha) y el bloque de JSON. Los cinco pasos son
+ * filas y no pestañas ni un asistente por etapas a propósito: el usuario tiene
+ * que poder leer su pregunta de arriba abajo como una oración, y para eso los
+ * cinco tienen que estar visibles a la vez y siempre en el mismo orden.
+ */
+
+.pasos {
+	display: flex;
+	flex-direction: column;
+}
+
+.paso {
+	display: grid;
+	grid-template-columns: 170px minmax(0, 1fr);
+	gap: var(--s4);
+	padding: var(--s4);
+	border-bottom: 1px solid var(--rule);
+}
+
+.paso:last-child {
+	border-bottom: 0;
+}
+
+.pasoLabel {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+
+.pasoNum {
+	font-family: var(--mono);
+	font-size: var(--t-mini);
+	color: var(--ink-faint);
+}
+
+.control {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s2);
+	min-width: 0;
+}
+
+.fila {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--s2);
+	align-items: center;
+}
+
+.hint {
+	font-size: var(--t-mini);
+	color: var(--ink-faint);
+	line-height: 1.45;
+	margin: 0;
+}
+
+/* Lista de valores de un filtro. Con tope de alto: un hogar con doscientas
+   categorías no puede empujar el resto del formulario fuera de la pantalla. */
+.valores {
+	max-height: 136px;
+	overflow-y: auto;
+	padding: var(--s2);
+	border: 1px solid var(--rule);
+	border-radius: var(--radius);
+	background: var(--paper);
+}
+
+/* Un campo del catálogo que este hogar no puede resolver. Se enseña apagado y
+   con el motivo en el title, en vez de esconderlo: que el catálogo tiene
+   catorce dimensiones y tu hogar usa cuatro es información, no un defecto. */
+.chipOff,
+.chipOff:hover {
+	opacity: 0.45;
+	cursor: not-allowed;
+	border-color: var(--rule);
+	color: var(--ink-faint);
+}
+
+.filtro {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--s2);
+	align-items: center;
+	padding: var(--s2);
+	border: 1px solid var(--rule);
+	border-radius: var(--radius);
+	background: var(--paper);
+}
+
+.quitar {
+	margin-left: auto;
+	padding: 3px 9px;
+	color: var(--ink-faint);
+}
+
+.frase {
+	font-family: var(--serif);
+	font-size: var(--t-h3);
+	line-height: 1.35;
+	margin: 0;
+}
+
+.json {
+	margin: 0;
+	padding: var(--s4);
+	background: var(--paper-sunken);
+	font-family: var(--mono);
+	font-size: var(--t-mini);
+	line-height: 1.55;
+	color: var(--ink);
+	overflow-x: auto;
+	white-space: pre;
+	tab-size: 2;
+}
+
+@media (max-width: 760px) {
+	.paso {
+		grid-template-columns: minmax(0, 1fr);
+		gap: var(--s2);
+	}
+}

@@ -54,6 +54,9 @@ interface MembershipRow {
  * es correcto aunque sea innecesario a partir de la segunda vez.
  */
 export async function resolveSession(): Promise<SessionState> {
+  const previa = sesionDeVistaPrevia()
+  if (previa !== null) return previa
+
   const user = await currentUser()
   if (user === null) return { kind: 'anonymous' }
 
@@ -129,6 +132,44 @@ export async function currentSession(): Promise<Session | null> {
   const state = await resolveSession()
   return state.kind === 'active' ? state.session : null
 }
+
+/**
+ * Sesión falsa para mirar la aplicación en desarrollo, contra el Postgres de
+ * Docker y sin pasar por Supabase.
+ *
+ * Las dos condiciones son deliberadas y ninguna sobra:
+ *
+ *  - `NODE_ENV !== 'production'` la apaga en cualquier despliegue. En Vercel
+ *    vale 'production' incluso en los previews, así que no hay entorno
+ *    desplegado donde esto pueda encenderse.
+ *  - Además hacen falta dos variables con UUID válido. Aunque alguien
+ *    consiguiera correr un build de desarrollo en un servidor, sin esas dos
+ *    variables no pasa nada.
+ *
+ * Un salto de autenticación es de las cosas más peligrosas que se pueden dejar
+ * en un repositorio, así que va con las dos llaves y con este comentario.
+ */
+function sesionDeVistaPrevia(): SessionState | null {
+  if (process.env.NODE_ENV === 'production') return null
+
+  const tenantId = process.env['MONEYPILOT_PREVIEW_TENANT']
+  const userId = process.env['MONEYPILOT_PREVIEW_USER']
+  if (tenantId === undefined || userId === undefined) return null
+  if (!UUID.test(tenantId) || !UUID.test(userId)) return null
+
+  return {
+    kind: 'active',
+    session: {
+      user: { id: userId, email: 'vista-previa@local' },
+      tenantId,
+      householdName: 'Hogar de vista previa',
+      baseCurrency: 'EUR',
+      role: 'titular',
+    },
+  }
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function defaultHouseholdName(email: string | null): string {
   if (email === null) return 'Mi hogar'

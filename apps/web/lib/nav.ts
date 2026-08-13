@@ -19,8 +19,16 @@
  * saber en qué categoría metió su propia pregunta.
  */
 
+import type { Route } from 'next'
+
 export interface NavItem {
-  readonly href: string
+  /**
+   * `Route` y no `string`: con las rutas tipadas de Next, un href suelto no se
+   * puede pasar a `<Link>`. Tiparlo acá hace que una entrada de menú que
+   * apunte a una página inexistente rompa el build en vez de dar un 404 que
+   * sólo se descubre haciendo click.
+   */
+  readonly href: Route
   readonly label: string
   /** Una línea que explica para qué sirve. Sale en el título de la página. */
   readonly blurb: string

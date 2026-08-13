@@ -20,7 +20,18 @@ import { join } from "node:path";
 // Todo control ASCII salvo tab (09), LF (0A) y CR (0D), más DEL (7F).
 const CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 
-const SKIP = new Set(["node_modules", "dist", ".git", "coverage", ".vitest"]);
+// Sólo fuente. La salida de un compilador puede llevar el separador escrito
+// como carácter literal y eso es correcto: es el compilador el que lo emite, y
+// nadie va a editarlo a mano ni un formateador va a pasar por encima.
+const SKIP = new Set([
+	"node_modules",
+	"dist",
+	".git",
+	".next",
+	".vercel",
+	"coverage",
+	".vitest",
+]);
 const EXTENSIONS = /\.(ts|mts|cts|js|mjs|json)$/;
 
 function walk(dir) {

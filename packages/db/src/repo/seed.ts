@@ -48,6 +48,8 @@ import {
   convert,
   currencyImbalances,
   daysInMonth,
+  differenceInDays,
+  type Money,
   money,
   type PlainDate,
   type Posting,
@@ -166,7 +168,7 @@ type Rng = ReturnType<typeof createRng>
  * global: dos hogares con el ejemplo cargado no pueden colisionar.
  */
 function seededUuid(tenantId: string, key: string): string {
-  const digest = createHash('sha256').update(`${tenantId}${key}`, 'utf8').digest()
+  const digest = createHash('sha256').update(`${tenantId}\u001F${key}`, 'utf8').digest()
   const bytes = Buffer.from(digest.subarray(0, 16))
   // Versión 8 (UUID de construcción propia) y variante RFC 4122. No es
   // decorativo: un uuid con bits de versión inventados confunde a cualquier
@@ -227,16 +229,30 @@ const USD_PER_EUR_E4: readonly bigint[] = [
   11_154n,
 ]
 
-function rateFor(monthIndex: number): bigint {
-  return USD_PER_EUR_E4[monthIndex % USD_PER_EUR_E4.length] ?? 10_800n
+/**
+ * La tasa se indexa por **mes del calendario**, no por la posición dentro del
+ * histórico.
+ *
+ * La diferencia importa porque cada posting guarda la fracción junto a
+ * `fx_as_of` y `fx_source`: eso afirma "esta era la tasa EUR/USD ese día".
+ * Con el índice por posición, sembrar 14 meses y sembrar 6 meses daban tasas
+ * distintas para el mismo día, así que dos hogares podían contradecirse sobre
+ * el mismo hecho. La tasa tiene que ser función de la fecha y de nada más.
+ */
+function rateFor(on: PlainDate): bigint {
+  const { year, month } = toParts(on)
+  const index = (year * 12 + (month - 1)) % USD_PER_EUR_E4.length
+  const rate = USD_PER_EUR_E4[index]
+  if (rate === undefined) throw new SeedError(`Sin tasa para ${on}`)
+  return rate
 }
 
 const E4 = 10_000n
 
 /** Convierte entre las dos monedas del ejemplo con la fracción exacta del mes. */
-function crossCurrency(amount: bigint, from: Currency, to: Currency, monthIndex: number): bigint {
+function crossCurrency(amount: bigint, from: Currency, to: Currency, on: PlainDate): bigint {
   if (from === to) return amount
-  const rate = rateFor(monthIndex)
+  const rate = rateFor(on)
   return from === 'EUR'
     ? convert(money(amount, 'EUR'), 'USD', rate, E4).amount
     : convert(money(amount, 'USD'), 'EUR', E4, rate).amount
@@ -763,7 +779,6 @@ interface SeedLeg {
 
 interface SeedMovement {
   readonly seq: number
-  readonly monthIndex: number
   readonly bookedOn: PlainDate
   readonly valuedOn?: PlainDate | undefined
   readonly description: string
@@ -779,7 +794,6 @@ interface BuildContext {
   readonly isCard: ReadonlySet<string>
   /** Cargos acumulados del mes por tarjeta, para liquidarla exacta el mes siguiente. */
   readonly cardCharges: Map<string, bigint>
-  monthIndex: number
 }
 
 function currencyOf(ctx: BuildContext, account: string): Currency {
@@ -822,18 +836,13 @@ function asCorePostings(legs: readonly SeedLeg[]): Posting[] {
 
 function push(
   ctx: BuildContext,
-  movement: Omit<SeedMovement, 'seq' | 'monthIndex' | 'legs'> & { readonly legs: SeedLeg[] },
+  movement: Omit<SeedMovement, 'seq' | 'legs'> & { readonly legs: SeedLeg[] },
 ): void {
   const legs = closeWithTrading(movement.legs)
   // El invariante se comprueba acá y no sólo en el test: un ejemplo que no
   // balancea es peor que no tener ejemplo.
   assertBalanced(asCorePostings(legs))
-  ctx.movements.push({
-    ...movement,
-    legs,
-    seq: ctx.movements.length,
-    monthIndex: ctx.monthIndex,
-  })
+  ctx.movements.push({ ...movement, legs, seq: ctx.movements.length })
 }
 
 interface ExpenseSpec {
@@ -853,7 +862,7 @@ interface ExpenseSpec {
 function expense(ctx: BuildContext, spec: ExpenseSpec): void {
   const payCurrency = currencyOf(ctx, spec.from)
   const categoryCurrency = currencyOf(ctx, spec.category)
-  const categoryAmount = crossCurrency(spec.amount, payCurrency, categoryCurrency, ctx.monthIndex)
+  const categoryAmount = crossCurrency(spec.amount, payCurrency, categoryCurrency, spec.on)
 
   push(ctx, {
     bookedOn: spec.on,
@@ -896,7 +905,7 @@ interface IncomeSpec {
 function income(ctx: BuildContext, spec: IncomeSpec): void {
   const intoCurrency = currencyOf(ctx, spec.into)
   const categoryCurrency = currencyOf(ctx, spec.category)
-  const categoryAmount = crossCurrency(spec.amount, intoCurrency, categoryCurrency, ctx.monthIndex)
+  const categoryAmount = crossCurrency(spec.amount, intoCurrency, categoryCurrency, spec.on)
 
   push(ctx, {
     bookedOn: spec.on,
@@ -928,8 +937,7 @@ interface TransferSpec {
 function transfer(ctx: BuildContext, spec: TransferSpec): void {
   const fromCurrency = currencyOf(ctx, spec.from)
   const toCurrency = currencyOf(ctx, spec.to)
-  const received =
-    spec.received ?? crossCurrency(spec.amount, fromCurrency, toCurrency, ctx.monthIndex)
+  const received = spec.received ?? crossCurrency(spec.amount, fromCurrency, toCurrency, spec.on)
 
   push(ctx, {
     bookedOn: spec.on,
@@ -1224,12 +1232,21 @@ function summarizeSeries(movements: readonly SeedMovement[]): {
   stopped: string[]
 } {
   const amountsByDescription = new Map<string, Set<string>>()
+  const lastMonthByDescription = new Map<string, string>()
+  let lastMonth = ''
   for (const movement of movements) {
     const main = movement.legs[0]
     if (main === undefined) continue
     const seen = amountsByDescription.get(movement.description) ?? new Set<string>()
     seen.add(main.amount.toString())
     amountsByDescription.set(movement.description, seen)
+
+    const month = movement.bookedOn.slice(0, 7)
+    const previous = lastMonthByDescription.get(movement.description)
+    if (previous === undefined || month > previous) {
+      lastMonthByDescription.set(movement.description, month)
+    }
+    if (month > lastMonth) lastMonth = month
   }
 
   const raised = RECURRING.filter((spec) => {
@@ -1240,9 +1257,16 @@ function summarizeSeries(movements: readonly SeedMovement[]): {
     return seen?.has((-spec.amount).toString()) === true && seen.has((-nuevo).toString())
   }).map((spec) => spec.description)
 
-  const stopped = RECURRING.filter(
-    (spec) => spec.stopsBefore !== undefined && amountsByDescription.has(spec.description),
-  ).map((spec) => spec.description)
+  // Que la serie exista no prueba que haya dejado de cobrarse: con un histórico
+  // corto, o con un `stopsBefore` que no llegue a morder, la serie llega hasta
+  // el último mes y anunciarla como cesada sería el dato inventado que este
+  // módulo no se permite. Se exige que su último mes sea anterior al último mes
+  // del histórico, que es lo que el usuario va a ver en la pantalla.
+  const stopped = RECURRING.filter((spec) => {
+    if (spec.stopsBefore === undefined) return false
+    const last = lastMonthByDescription.get(spec.description)
+    return last !== undefined && last < lastMonth
+  }).map((spec) => spec.description)
 
   return { raised, stopped }
 }
@@ -1269,7 +1293,6 @@ function buildMovements(asOf: PlainDate, months: number, accounts: readonly Seed
     currencyOf: new Map(accounts.map((a) => [a.key, a.currency])),
     isCard: new Set(CARDS.map((c) => c.key)),
     cardCharges: new Map(),
-    monthIndex: 0,
   }
 
   const first = monthBack(asOf, months - 1)
@@ -1304,7 +1327,6 @@ function buildMovements(asOf: PlainDate, months: number, accounts: readonly Seed
   }
 
   for (let index = 0; index < months; index += 1) {
-    ctx.monthIndex = index
     const { year, month } = monthBack(asOf, months - 1 - index)
     const day = (n: number): PlainDate => dayIn(year, month, n)
     /** Meses que faltan hasta el corte. 0 es el mes en curso. */
@@ -1463,12 +1485,13 @@ function buildMovements(asOf: PlainDate, months: number, accounts: readonly Seed
     // comercio cobró en euros. Los tres números, en el otro sentido.
     if (ctx.rng.chance(45)) {
       const native = ctx.rng.minor(180_00, 640_00)
+      const on = day(ctx.rng.between(4, 24))
       expense(ctx, {
-        on: day(ctx.rng.between(4, 24)),
+        on,
         description: 'Hotel Tivoli Lisboa',
         from: 'amex-platinum',
         category: 'cat:viajes',
-        amount: crossCurrency(native, 'EUR', 'USD', index),
+        amount: crossCurrency(native, 'EUR', 'USD', on),
         native: { amount: native, currency: 'EUR' },
         dims: [{ value: 'ent:personal', ppm: FULL }],
       })
@@ -1478,12 +1501,13 @@ function buildMovements(asOf: PlainDate, months: number, accounts: readonly Seed
     // dólares. Es el caso clásico de los tres números.
     if (ctx.rng.chance(35)) {
       const native = ctx.rng.minor(90_00, 520_00)
+      const on = day(ctx.rng.between(5, 25))
       expense(ctx, {
-        on: day(ctx.rng.between(5, 25)),
+        on,
         description: 'B&H Photo New York',
         from: 'bbva-visa',
         category: 'cat:oficina',
-        amount: crossCurrency(native, 'USD', 'EUR', index),
+        amount: crossCurrency(native, 'USD', 'EUR', on),
         native: { amount: native, currency: 'USD' },
         dims: [{ value: 'ent:personal', ppm: FULL }],
       })
@@ -1812,8 +1836,14 @@ export async function seedDemoHousehold(
     movements.map((movement) => {
       const main = movement.legs[0]
       if (main === undefined) throw new SeedError('Asiento sin patas en el ejemplo')
+      // Sin `??`: si la cuenta no estuviera resuelta, caer a la clave del
+      // catálogo produciría una huella calculada sobre un id que no existe.
+      // No falla nada, y el hogar queda con huellas que no se corresponden con
+      // sus asientos — el peor modo de fallo posible para un índice único.
+      const account = accountId.get(main.account)
+      if (account === undefined) throw new SeedError(`Cuenta desconocida: ${main.account}`)
       return {
-        accountId: accountId.get(main.account) ?? main.account,
+        accountId: account,
         bookedOn: movement.bookedOn,
         amount: money(main.amount, main.currency),
         descriptionRaw: movement.description,
@@ -1822,7 +1852,13 @@ export async function seedDemoHousehold(
   )
 
   const batchId = seededUuid(tenantId, 'batch')
-  const entryIds = movements.map((_, index) => seededUuid(tenantId, `entry:${index}`))
+  // Id y movimiento viajan juntos: emparejarlos después por índice es una
+  // invitación a que un `?? ''` tape un desfase entre las dos listas.
+  const entries = movements.map((movement, index) => ({
+    movement,
+    id: seededUuid(tenantId, `entry:${index}`),
+  }))
+  const entryIds = entries.map((entry) => entry.id)
   const fingerprints = withOrdinals.map((row) => transactionFingerprint(row))
 
   // ── Importes en la moneda de reporte ──
@@ -1830,10 +1866,12 @@ export async function seedDemoHousehold(
   const postingRows: PostingRow[] = []
   const dimensionRows: { entryId: string; ordinal: number; valueId: string; ppm: number }[] = []
 
-  for (const [index, movement] of movements.entries()) {
-    const entryId = entryIds[index] ?? ''
+  for (const { movement, id: entryId } of entries) {
     for (const [ordinal, leg] of movement.legs.entries()) {
-      const converted = toBase(leg.amount, leg.currency, baseCurrency, movement.monthIndex)
+      // La misma fecha para las dos patas del asiento: si cada una tomara una
+      // tasa distinta, los importes en moneda de reporte dejarían de sumar cero
+      // y cualquier informe que agregue `base_amount` arrastraría el residuo.
+      const converted = toBase(leg.amount, leg.currency, baseCurrency, movement.bookedOn)
       if (converted === null) postingsWithoutBase += 1
       const account = accountId.get(leg.account)
       if (account === undefined) throw new SeedError(`Cuenta desconocida: ${leg.account}`)
@@ -1882,7 +1920,8 @@ export async function seedDemoHousehold(
     'todavía no trae. El movimiento no existe en el libro: por eso el saldo declarado es menor.'
 
   const balances = BANK_ACCOUNTS.map((account) => {
-    const id = accountId.get(account.key) ?? ''
+    const id = accountId.get(account.key)
+    if (id === undefined) throw new SeedError(`Cuenta desconocida: ${account.key}`)
     const total = computed.get(id) ?? 0n
     const declared = account.key === deltaAccount.key ? total - deltaAmount : total
     return { id, key: account.key, currency: account.currency, declared }
@@ -1898,9 +1937,15 @@ export async function seedDemoHousehold(
   ]
 
   // ── Cola de revisión ──
-  const entryByTag = new Map<string, string>()
-  for (const [index, movement] of movements.entries()) {
-    if (movement.tag !== undefined) entryByTag.set(movement.tag, entryIds[index] ?? '')
+  const entryByTag = new Map<string, TaggedEntry>()
+  for (const { movement, id } of entries) {
+    const main = movement.legs[0]
+    if (movement.tag === undefined || main === undefined) continue
+    entryByTag.set(movement.tag, {
+      id,
+      bookedOn: movement.bookedOn,
+      amount: money(main.amount, main.currency),
+    })
   }
   const reviews = buildReviews(entryByTag)
 
@@ -1971,7 +2016,7 @@ export async function seedDemoHousehold(
 
 function contentHash(tenantId: string, asOf: string, months: number): string {
   return createHash('sha256')
-    .update(`${DEMO_BATCH_FILE}${tenantId}${asOf}${months}`, 'utf8')
+    .update(`${DEMO_BATCH_FILE}\u001F${tenantId}\u001F${asOf}\u001F${months}`, 'utf8')
     .digest('hex')
 }
 
@@ -1991,10 +2036,10 @@ function toBase(
   amount: bigint,
   currency: Currency,
   baseCurrency: string,
-  monthIndex: number,
+  on: PlainDate,
 ): BaseConversion | null {
   if (currency === baseCurrency) return { amount }
-  const rate = rateFor(monthIndex)
+  const rate = rateFor(on)
   if (currency === 'USD' && baseCurrency === 'EUR') {
     return {
       amount: convert(money(amount, 'USD'), 'EUR', E4, rate).amount,
@@ -2037,9 +2082,26 @@ interface ReviewRow {
   readonly evidence: unknown
 }
 
-function buildReviews(entryByTag: ReadonlyMap<string, string>): ReviewRow[] {
+/** El asiento al que apunta una revisión, con lo que hace falta para probarla. */
+interface TaggedEntry {
+  readonly id: string
+  readonly bookedOn: PlainDate
+  readonly amount: Money
+}
+
+/**
+ * La evidencia se **deriva** de los asientos que se sembraron, no se escribe a
+ * mano junto a la explicación.
+ *
+ * Importa más de lo que parece: la evidencia es lo que el producto le enseña a
+ * una persona para que decida. Si el importe y los días vienen de una constante
+ * copiada, cambiar el movimiento generado deja la evidencia mintiendo sin que
+ * falle nada, y la cola de revisión pasa a describir movimientos que no son los
+ * que están en el libro.
+ */
+function buildReviews(entryByTag: ReadonlyMap<string, TaggedEntry>): ReviewRow[] {
   const rows: ReviewRow[] = []
-  const at = (tag: string): string | null => entryByTag.get(tag) ?? null
+  const at = (tag: string): TaggedEntry | null => entryByTag.get(tag) ?? null
 
   const duplicateA = at('duplicado-a')
   const duplicateB = at('duplicado-b')
@@ -2048,13 +2110,13 @@ function buildReviews(entryByTag: ReadonlyMap<string, string>): ReviewRow[] {
       key: 'duplicado',
       kind: 'posible_duplicado',
       state: 'pendiente',
-      entryId: duplicateB,
-      counterpartId: duplicateA,
+      entryId: duplicateB.id,
+      counterpartId: duplicateA.id,
       evidence: {
         similitud: 1,
-        dias_de_diferencia: 0,
-        importe: '-84.20',
-        moneda: 'EUR',
+        dias_de_diferencia: differenceInDays(duplicateA.bookedOn, duplicateB.bookedOn),
+        importe: toDecimalString(duplicateB.amount),
+        moneda: duplicateB.amount.currency,
         motivo:
           'Dos cargos idénticos el mismo día en la misma tarjeta. Pueden ser dos compras ' +
           'reales; el sistema no descarta por su cuenta.',
@@ -2065,31 +2127,34 @@ function buildReviews(entryByTag: ReadonlyMap<string, string>): ReviewRow[] {
   const out = at('traspaso-sugerido-salida')
   const into = at('traspaso-sugerido-entrada')
   if (out !== null && into !== null) {
+    const gap = differenceInDays(out.bookedOn, into.bookedOn)
     rows.push({
       key: 'traspaso',
       kind: 'transferencia_sugerida',
       state: 'pendiente',
-      entryId: out,
-      counterpartId: into,
+      entryId: out.id,
+      counterpartId: into.id,
       evidence: {
-        dias_de_diferencia: 2,
-        importe: '3000.00',
-        moneda: 'EUR',
-        motivo: 'Salida y entrada del mismo importe en dos cuentas propias, con dos días de gap.',
+        dias_de_diferencia: gap,
+        importe: toDecimalString(into.amount),
+        moneda: into.amount.currency,
+        motivo: `Salida y entrada del mismo importe en dos cuentas propias, con ${gap} días de gap.`,
       },
     })
   }
 
   for (const tag of ['sin-categorizar-1', 'sin-categorizar-0']) {
-    const entryId = at(tag)
-    if (entryId === null) continue
+    const entry = at(tag)
+    if (entry === null) continue
     rows.push({
       key: tag,
       kind: 'sin_categorizar',
       state: 'pendiente',
-      entryId,
+      entryId: entry.id,
       counterpartId: null,
       evidence: {
+        importe: toDecimalString(entry.amount),
+        moneda: entry.amount.currency,
         motivo: 'El descriptor no permite deducir la categoría. Hace falta una decisión humana.',
       },
     })
@@ -2178,13 +2243,13 @@ async function resolveDimensions(
     DIMENSION_VALUES.map((v) => v.label),
   ])
   const existingValues = new Map(
-    valueRows.map((row) => [`${row.dimension_id}${row.label}`, row.id]),
+    valueRows.map((row) => [`${row.dimension_id}\u001F${row.label}`, row.id]),
   )
 
   const idByKey = new Map<string, string>()
   const values = DIMENSION_VALUES.map((value) => {
     const dimensionId = dimensionIdByKey.get(value.dimension) ?? ''
-    const found = existingValues.get(`${dimensionId}${value.label}`)
+    const found = existingValues.get(`${dimensionId}\u001F${value.label}`)
     const id = found ?? seededUuid(tenantId, `dimension_value:${value.key}`)
     idByKey.set(value.key, id)
     return {
@@ -2367,7 +2432,7 @@ async function insertPostings(
   // Se indexa por (asiento, ordinal) y no por el orden de las filas devueltas:
   // `returning` no promete conservarlo, y si algún día no lo conserva, las
   // dimensiones se colgarían de la pata equivocada sin que nada fallara.
-  return new Map(inserted.map((row) => [`${row.entry_id}${row.ordinal}`, row.id]))
+  return new Map(inserted.map((row) => [`${row.entry_id}\u001F${row.ordinal}`, row.id]))
 }
 
 async function insertPostingDimensions(
@@ -2384,7 +2449,7 @@ async function insertPostingDimensions(
   const weight: number[] = []
 
   for (const row of rows) {
-    const posting = postingIds.get(`${row.entryId}${row.ordinal}`)
+    const posting = postingIds.get(`${row.entryId}\u001F${row.ordinal}`)
     const dimension = dimensionOf.get(row.valueId)
     if (posting === undefined || dimension === undefined) {
       throw new SeedError('No se pudo resolver la pata o la dimensión de una atribución')
@@ -2470,6 +2535,7 @@ export async function removeDemoData(client: TenantClient): Promise<{ removed: n
     'select id from import_batch where file_name = $1 and format = $2',
     [DEMO_BATCH_FILE, DEMO_BATCH_FORMAT],
   )
+  const batchIds = rows.map((row) => row.id)
 
   let removed = 0
   const run = async (sql: string, params: unknown[]): Promise<void> => {
@@ -2477,7 +2543,11 @@ export async function removeDemoData(client: TenantClient): Promise<{ removed: n
     removed += result.rowCount ?? 0
   }
 
-  for (const batch of rows) {
+  // Todos los lotes de una pasada. Normalmente hay uno solo, pero recorrerlos
+  // en un bucle con seis consultas por vuelta convierte una limpieza en un
+  // número de viajes a la base que depende de los datos, y no hay ninguna razón
+  // para pagarlo: las mismas seis consultas con un array de ids hacen lo mismo.
+  if (batchIds.length > 0) {
     // Se resuelven los ids antes de borrar, en dos consultas que van derechas
     // al índice, en vez de un `delete ... where id in (subconsulta)`.
     //
@@ -2488,9 +2558,10 @@ export async function removeDemoData(client: TenantClient): Promise<{ removed: n
     // 797 filas de tablas de menos de 2.000. Con los ids en un array, el plan
     // es el mismo siempre y no depende de que alguien haya pasado un ANALYZE.
     const entryIds = (
-      await client.query<{ id: string }>('select id from entry where import_batch_id = $1', [
-        batch.id,
-      ])
+      await client.query<{ id: string }>(
+        'select id from entry where import_batch_id = any($1::uuid[])',
+        [batchIds],
+      )
     ).rows.map((row) => row.id)
 
     const postingIds =
@@ -2507,10 +2578,10 @@ export async function removeDemoData(client: TenantClient): Promise<{ removed: n
       await run('delete from posting_dimension where posting_id = any($1::bigint[])', [postingIds])
       await run('delete from posting where id = any($1::bigint[])', [postingIds])
     }
-    await run('delete from review_item where import_batch_id = $1', [batch.id])
-    await run('delete from declared_balance where import_batch_id = $1', [batch.id])
-    await run('delete from entry where import_batch_id = $1', [batch.id])
-    await run('delete from import_batch where id = $1', [batch.id])
+    await run('delete from review_item where import_batch_id = any($1::uuid[])', [batchIds])
+    await run('delete from declared_balance where import_batch_id = any($1::uuid[])', [batchIds])
+    await run('delete from entry where import_batch_id = any($1::uuid[])', [batchIds])
+    await run('delete from import_batch where id = any($1::uuid[])', [batchIds])
   }
 
   const valueIds = DIMENSION_VALUES.map((v) => seededUuid(tenantId, `dimension_value:${v.key}`))
