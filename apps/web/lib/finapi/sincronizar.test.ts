@@ -98,7 +98,17 @@ suite('sincronización del feed de finAPI', () => {
         'insert into tenant (name, base_currency) values ($1, $2) returning id',
         [`Casa Feed Sync ${RUN} ${hogaresCreados.length}`, 'EUR'],
       )
-      return rows[0]?.id as string
+      const id = rows[0]?.id as string
+      // La cuenta de patrimonio que `provision_household` crea con cada hogar.
+      // Acá el hogar se inserta a mano —el test no pasa por el alta— así que
+      // hay que ponerla, y es la que la apertura tiene que reutilizar en vez de
+      // crearse una segunda con el nombre desambiguado.
+      await client.query(
+        `insert into account (tenant_id, kind, name, currency)
+         values ($1, 'equity', 'Saldo de apertura', 'EUR')`,
+        [id],
+      )
+      return id
     })
     hogaresCreados.push(creado)
     hogar = creado
@@ -297,6 +307,225 @@ suite('sincronización del feed de finAPI', () => {
       return rows.length
     })
     expect(cuentas).toBe(1)
+  })
+
+  /* ── La apertura ───────────────────────────────────────────────────────── */
+
+  // Las cifras no son inventadas: son las del sandbox de finAPI. La cuenta
+  // principal del banco de prueba declara 16.978,51 y la ventana descargada
+  // (806 movimientos) suma −6.793,55. Sin apertura, eso es un delta de
+  // −23.772,06 y la cuenta sale en rojo teniendo todo bien.
+  const SALDO_DEL_BANCO = '16978.51'
+  const APERTURA = '23772.06'
+
+  it('asienta la historia anterior a la ventana y deja el delta en cero', async () => {
+    feed.cuentas = [cuenta({ balance: SALDO_DEL_BANCO })]
+    feed.movimientos = [
+      movimiento({ id: 1, amount: '-6800.00', bankBookingDate: '2026-08-01' }),
+      movimiento({ id: 2, amount: '6.45', bankBookingDate: '2026-08-02' }),
+    ]
+    const plan = await preparar()
+    const resultado = await sincronizar()
+
+    expect(resultado.kind).toBe('ok')
+    if (resultado.kind !== 'ok') return
+
+    const enElInforme = resultado.report.accounts[0]
+    // La apertura NO es cero: es lo que la cuenta tenía antes del primer
+    // movimiento que se pudo descargar.
+    expect(enElInforme?.openingBalance?.amount).toBe(APERTURA)
+    expect(enElInforme?.movements.amount).toBe('-6793.55')
+    // Y el informe sigue enseñando las dos cifras: lo que dice el banco y lo
+    // que calculamos. Lo que cambia es que ahora coinciden.
+    expect(enElInforme?.reportedClosing?.amount).toBe(SALDO_DEL_BANCO)
+    expect(enElInforme?.computedClosing?.amount).toBe(SALDO_DEL_BANCO)
+    expect(enElInforme?.delta?.amount).toBe('0.00')
+    expect(enElInforme?.status).toBe('conciliada')
+
+    // El libro llega al saldo del banco de verdad, no sólo en el informe.
+    expect(await saldoDelLibro(plan[0]?.accountId as string)).toBe('1697851')
+
+    // Y el asiento es explícito y reconocible, no un ajuste invisible: fecha el
+    // día anterior al primer movimiento, descripción en castellano y
+    // contrapartida contra la cuenta de patrimonio que el hogar ya tenía.
+    const apertura = await enHogar(async (client) => {
+      const { rows } = await client.query<{
+        booked_on: string
+        description: string
+        source: string
+        contrapartida: string
+        importe: string
+      }>(
+        `select to_char(e.booked_on, 'YYYY-MM-DD') as booked_on, e.description, e.source::text,
+                otra.name as contrapartida, p.amount::text as importe
+           from entry e
+           join posting p on p.entry_id = e.id and p.account_id = $1::uuid
+           join posting q on q.entry_id = e.id and q.id <> p.id
+           join account otra on otra.id = q.account_id
+          where e.description = $2`,
+        [plan[0]?.accountId, 'Saldo anterior a la ventana descargada'],
+      )
+      return rows[0]
+    })
+    expect(apertura?.booked_on).toBe('2026-07-31')
+    // La cuenta que el hogar ya tenía, no una segunda inventada por el feed:
+    // 'Saldo de apertura' existe desde el alta justamente para esto.
+    expect(apertura?.contrapartida).toBe('Saldo de apertura')
+    expect(apertura?.importe).toBe('2377206')
+
+    expect(resultado.apertura?.outcome).toBe('created')
+    expect(resultado.apertura?.importe).toBe(APERTURA)
+  })
+
+  it('cada asiento sigue balanceando a cero, también el de apertura', async () => {
+    feed.cuentas = [cuenta({ balance: SALDO_DEL_BANCO })]
+    feed.movimientos = [movimiento({ id: 1, amount: '-6793.55', bankBookingDate: '2026-08-01' })]
+    await preparar()
+    await sincronizar()
+
+    const descuadres = await enHogar(async (client) => {
+      const { rows } = await client.query(
+        `select p.entry_id, sum(p.amount)::text as total
+           from posting p
+          group by p.entry_id
+         having sum(p.amount) <> 0`,
+      )
+      return rows
+    })
+    expect(descuadres).toEqual([])
+  })
+
+  it('sincronizar dos veces no crea dos aperturas ni duplica la diferencia', async () => {
+    feed.cuentas = [cuenta({ balance: SALDO_DEL_BANCO })]
+    feed.movimientos = [movimiento({ id: 1, amount: '-6793.55', bankBookingDate: '2026-08-01' })]
+    const plan = await preparar()
+    const primera = await sincronizar()
+    if (primera.kind !== 'ok') throw new Error('la primera tenía que funcionar')
+
+    // El banco añade un movimiento: el contenido cambia, así que el atajo del
+    // hash NO aplica y `persistImport` corre de verdad. Es el caso en el que la
+    // implementación ingenua asentaría una segunda apertura por casi el mismo
+    // importe y duplicaría la historia que falta.
+    feed.cuentas = [cuenta({ balance: '16878.51' })]
+    feed.movimientos = [
+      movimiento({ id: 1, amount: '-6793.55', bankBookingDate: '2026-08-01' }),
+      movimiento({ id: 2, amount: '-100.00', bankBookingDate: '2026-08-05' }),
+    ]
+    const segunda = await sincronizar()
+
+    expect(segunda.kind).toBe('ok')
+    if (segunda.kind !== 'ok') return
+    expect(segunda.imported).toBe(1)
+    expect(segunda.duplicates).toBe(1)
+
+    // Una sola apertura, con el MISMO importe: los movimientos nuevos ya
+    // estaban contados en el saldo que declara el banco, así que la historia
+    // que falta no cambió.
+    const aperturas = await enHogar(async (client) => {
+      const { rows } = await client.query<{ id: string; importe: string }>(
+        `select e.id, p.amount::text as importe
+           from entry e
+           join posting p on p.entry_id = e.id and p.account_id = $1::uuid
+          where e.description = $2`,
+        [plan[0]?.accountId, 'Saldo anterior a la ventana descargada'],
+      )
+      return rows
+    })
+    expect(aperturas).toHaveLength(1)
+    expect(aperturas[0]?.importe).toBe('2377206')
+    expect(segunda.apertura?.outcome).toBe('unchanged')
+
+    // Y el libro sigue cuadrando con el banco: 16.878,51 y no 40.650,57, que
+    // es lo que daría la diferencia contada dos veces.
+    expect(await saldoDelLibro(plan[0]?.accountId as string)).toBe('1687851')
+    expect(segunda.report.accounts[0]?.delta?.amount).toBe('0.00')
+  })
+
+  it('si la ventana se corre y la apertura cambia, se ajusta el asiento que ya estaba', async () => {
+    feed.cuentas = [cuenta({ balance: SALDO_DEL_BANCO })]
+    feed.movimientos = [movimiento({ id: 1, amount: '-6793.55', bankBookingDate: '2026-08-01' })]
+    const plan = await preparar()
+    await sincronizar()
+
+    // Ahora finAPI devuelve además un movimiento más viejo que antes no daba: la
+    // ventana se corrió hacia atrás y el saldo del banco es el mismo, así que
+    // la historia que falta es 500 menos.
+    feed.cuentas = [cuenta({ balance: SALDO_DEL_BANCO })]
+    feed.movimientos = [
+      movimiento({ id: 9, amount: '-500.00', bankBookingDate: '2026-07-20' }),
+      movimiento({ id: 1, amount: '-6793.55', bankBookingDate: '2026-08-01' }),
+    ]
+    const segunda = await sincronizar()
+    expect(segunda.kind).toBe('ok')
+    if (segunda.kind !== 'ok') return
+
+    expect(segunda.apertura?.outcome).toBe('adjusted')
+    expect(segunda.apertura?.importeAnterior).toBe(APERTURA)
+    expect(segunda.apertura?.importe).toBe('24272.06')
+
+    const aperturas = await enHogar(async (client) => {
+      const { rows } = await client.query<{ importe: string; booked_on: string }>(
+        `select p.amount::text as importe, to_char(e.booked_on, 'YYYY-MM-DD') as booked_on
+           from entry e
+           join posting p on p.entry_id = e.id and p.account_id = $1::uuid
+          where e.description = $2`,
+        [plan[0]?.accountId, 'Saldo anterior a la ventana descargada'],
+      )
+      return rows
+    })
+    // Un asiento, ajustado, y movido al día anterior al movimiento más viejo.
+    expect(aperturas).toHaveLength(1)
+    expect(aperturas[0]?.booked_on).toBe('2026-07-19')
+    expect(await saldoDelLibro(plan[0]?.accountId as string)).toBe('1697851')
+    expect(segunda.report.accounts[0]?.delta?.amount).toBe('0.00')
+  })
+
+  it('sin saldo declarado por el banco no se inventa ninguna apertura', async () => {
+    // `balance: null` es lo que devuelve finAPI cuando no pudo leer el saldo.
+    // Derivar la apertura restando los movimientos de nuestro propio cierre
+    // daría delta cero siempre y la comprobación no significaría nada.
+    feed.cuentas = [cuenta({ balance: null })]
+    feed.movimientos = [
+      movimiento({ id: 1, amount: '-6793.55', bankBookingDate: '2026-08-01' }),
+      movimiento({ id: 2, amount: '6.45', bankBookingDate: '2026-08-02' }),
+    ]
+    const plan = await preparar()
+    const resultado = await sincronizar()
+
+    expect(resultado.kind).toBe('ok')
+    if (resultado.kind !== 'ok') return
+
+    expect(resultado.apertura).toBeNull()
+    const enElInforme = resultado.report.accounts[0]
+    expect(enElInforme?.reportedClosing).toBeNull()
+    expect(enElInforme?.delta).toBeNull()
+    // 'sin_saldo_declarado' es la verdad y tiene que seguir siéndolo: no
+    // cuadra nada que no se haya podido comprobar.
+    expect(enElInforme?.status).toBe('sin_saldo_declarado')
+
+    const aperturas = await enHogar(async (client) => {
+      const { rows } = await client.query('select id from entry where description = $1', [
+        'Saldo anterior a la ventana descargada',
+      ])
+      return rows.length
+    })
+    expect(aperturas).toBe(0)
+    // El libro es exactamente lo que trajo el feed, sin nada añadido.
+    expect(await saldoDelLibro(plan[0]?.accountId as string)).toBe('-678710')
+  })
+
+  it('deshacer el lote se lleva también la apertura que creó', async () => {
+    feed.cuentas = [cuenta({ balance: SALDO_DEL_BANCO })]
+    feed.movimientos = [movimiento({ id: 1, amount: '-6793.55', bankBookingDate: '2026-08-01' })]
+    const plan = await preparar()
+    const resultado = await sincronizar()
+    if (resultado.kind !== 'ok') throw new Error('la sincronización tenía que funcionar')
+
+    const deshecho = await enHogar((client) => revertImport(client, resultado.batchId))
+    // Dos: el movimiento y la apertura. Si la apertura sobreviviera, la cuenta
+    // se quedaría con 23.772,06 que no vinieron de ningún sitio.
+    expect(deshecho.removedEntries).toBe(2)
+    expect(await saldoDelLibro(plan[0]?.accountId as string)).toBe('0')
   })
 
   it('una cuenta sin movimientos no deja un lote vacío ocupando su huella', async () => {

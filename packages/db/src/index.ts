@@ -85,9 +85,13 @@ export {
 export type {
   BookTransactionInput,
   DeclaredBalanceInput,
+  EnsureOpeningEntryInput,
+  EnsureOpeningEntryResult,
   ImportBatchRow,
   ImportBatchStatus,
   NeedsReviewTransaction,
+  OpeningEntryOutcome,
+  OpeningEntryRow,
   PersistableTransaction,
   PersistImportInput,
   PersistImportResult,
@@ -97,8 +101,11 @@ export type {
 } from './repo/import.js'
 export {
   bookTransaction,
+  ensureOpeningEntry,
   listImportBatches,
+  OPENING_ENTRY_DESCRIPTION,
   persistImport,
+  readOpeningEntry,
   revertImport,
   updateBookedTransaction,
 } from './repo/import.js'

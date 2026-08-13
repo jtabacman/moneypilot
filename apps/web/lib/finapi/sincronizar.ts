@@ -19,12 +19,22 @@
  *    vez: saldo previo + movimientos = lo que dice el banco, o hay delta y se
  *    ve. Ver `openingFromLedger` en el pipeline.
  *
+ *  · **La ventana descargada no es toda la historia, y eso se asienta.** El
+ *    feed trae los últimos 24 meses de una cuenta que existe hace quince años:
+ *    los movimientos que llegan no explican el saldo que declara el banco, y
+ *    la diferencia no es un error sino la historia anterior. Se asienta como
+ *    apertura contra 'Saldo de apertura' —la cuenta de patrimonio que
+ *    `provision_household` crea con cada hogar justo para esto— y con eso el
+ *    delta pasa a ser cero **porque el libro llega al saldo del banco**, no
+ *    porque se haya tapado nada. Ver `aperturaNecesaria`.
+ *
  *  · **Un movimiento puede corregirse en su sitio.** El identificador de
  *    finAPI es estable entre pendiente y asentado, así que un importe que
  *    cambia no es un movimiento nuevo: es el mismo, corregido. Eso es el
  *    veredicto 'updated' del dedup y se aplica con `updateBookedTransaction`.
  *
  *  · **No se guarda el saldo como `declared_balance`.** Ver `sincronizarCuenta`.
+ *    La apertura es otra cosa y no lo necesita: es un asiento del libro.
  *
  * ── Una petición, una cuenta ─────────────────────────────────────────────────
  *
@@ -36,16 +46,28 @@
  */
 
 import { createHash } from 'node:crypto'
-import { type Money, money, type ParsedStatement, toDecimalString, zero } from '@moneypilot/core'
+import {
+  addDays,
+  type Money,
+  money,
+  openingEntryAmount,
+  type ParsedStatement,
+  parsePlainDate,
+  toDecimalString,
+  zero,
+} from '@moneypilot/core'
 import {
   type AccountKind,
   ensureLedgerAccount,
+  ensureOpeningEntry,
   type FeedConnectionRow,
   listFeedAccounts,
   markFeedAccountSynced,
+  type OpeningEntryOutcome,
   type PersistableTransaction,
   persistImport,
   readConnection,
+  readOpeningEntry,
   type TenantClient,
   updateBookedTransaction,
 } from '@moneypilot/db'
@@ -179,6 +201,22 @@ export interface FilaEnRevision {
   readonly description: string
 }
 
+/**
+ * El asiento de apertura tal como quedó. `null` cuando el banco no declaró
+ * saldo: sin un cierre de fuera no hay apertura que calcular, y la
+ * reconciliación se queda —con razón— en 'sin_saldo_declarado'.
+ */
+export interface AperturaDelLote {
+  readonly entryId: string | null
+  readonly outcome: OpeningEntryOutcome
+  /** Importe con el que quedó, como cadena decimal exacta. Nunca un number. */
+  readonly importe: string
+  /** Con el que estaba antes. Distinto del de arriba sólo si hubo ajuste. */
+  readonly importeAnterior: string
+  /** Día anterior al primer movimiento de la ventana descargada. */
+  readonly fecha: string
+}
+
 export interface CuentaSincronizada {
   readonly kind: 'ok'
   readonly externalAccountId: string
@@ -193,6 +231,7 @@ export interface CuentaSincronizada {
   readonly needsReview: number
   readonly report: WireReport
   readonly review: readonly FilaEnRevision[]
+  readonly apertura: AperturaDelLote | null
 }
 
 export interface CuentaVacia {
@@ -277,6 +316,7 @@ export async function sincronizarCuenta(
 
   const existing = await existingForAccount(client, enlace.accountId, { from: desde, to: hasta })
   const saldoPrevio = await saldoDelLibro(client, enlace.accountId, nuestra.currency)
+  const aperturaPrevia = await readOpeningEntry(client, enlace.accountId)
 
   const opciones = {
     fileName: nombreDelLote(nuestra.name, cruda),
@@ -297,12 +337,34 @@ export async function sincronizarCuenta(
   const sonda = runStatements([statement], opciones)
   const correcciones = correccionesDe(sonda, enlace.accountId, nuestra.currency)
 
+  const apertura = aperturaNecesaria({
+    statement,
+    sonda,
+    accountId: enlace.accountId,
+    currency: nuestra.currency,
+    saldoPrevio,
+    aperturaPrevia: aperturaPrevia?.amount ?? 0n,
+    correcciones: correcciones.total,
+    primerMovimiento: desde,
+  })
+
+  // Segunda pasada: reconciliar de verdad. Con la apertura, el cierre calculado
+  // deja de partir de cero y pasa a partir de lo que la cuenta tenía antes de
+  // la ventana; el `movementAdjustments` mete el desplazamiento de las
+  // correcciones. Cuando ninguna de las dos cosas cambia nada, se reutiliza la
+  // sonda: correr el motor otra vez daría exactamente el mismo informe.
   const resultado =
-    correcciones.total.amount === 0n
+    correcciones.total.amount === 0n &&
+    (apertura === null || apertura.delInforme.amount === saldoPrevio.amount)
       ? sonda
-      : runStatements([statement], {
+      : runStatements([conAvisoDeApertura(statement, apertura, aperturaPrevia?.amount ?? 0n)], {
           ...opciones,
-          movementAdjustments: new Map([[enlace.accountId, correcciones.total]]),
+          ...(apertura === null
+            ? {}
+            : { openingFromLedger: new Map([[enlace.accountId, apertura.delInforme]]) }),
+          ...(correcciones.total.amount === 0n
+            ? {}
+            : { movementAdjustments: new Map([[enlace.accountId, correcciones.total]]) }),
         })
 
   const report = conNombreDeCuenta(toWireReport(resultado.report), enlace.accountId, nuestra.name)
@@ -343,9 +405,43 @@ export async function sincronizarCuenta(
     // distintas y las dos son ciertas — guardarlas haría que la segunda
     // abortara la importación entera por contradecir a la primera. El saldo
     // sigue haciendo su trabajo donde corresponde: en el informe, como cierre
-    // real contra el que se mide el delta.
+    // real contra el que se mide el delta, y como origen de la apertura de acá
+    // abajo — que es un asiento del libro y no necesita `declared_balance`
+    // para nada.
     declaredBalances: [],
   })
+
+  // La apertura va DESPUÉS del lote y dentro de la misma transacción: se ata a
+  // él (`batchId`), así que deshacer la importación se la lleva igual que a los
+  // movimientos que la hicieron falta. Ver `ensureOpeningEntry`.
+  const aperturaAsentada =
+    apertura === null
+      ? null
+      : await ensureOpeningEntry(client, {
+          accountId: enlace.accountId,
+          batchId: guardado.batchId,
+          amount: apertura.importe,
+          currency: nuestra.currency,
+          bookedOn: apertura.fecha,
+          source: 'api',
+        })
+
+  if (apertura !== null && aperturaAsentada !== null) {
+    // Lo que convierte "delta 0,00" en una afirmación comprobable en vez de una
+    // resta que hicimos nosotros: el saldo se relee de la base después de
+    // escribir y se contrasta contra el que declaró el banco. Si no coinciden,
+    // el informe que se acaba de guardar dice algo que el libro no sostiene, y
+    // eso no puede salir por pantalla — se cae la sincronización entera, que
+    // corre en una sola transacción y no deja nada escrito.
+    if (aperturaAsentada.balance !== apertura.cierreDeclarado.amount) {
+      throw new SincronizacionError(
+        `Después de asentar la apertura, "${nuestra.name}" suma ` +
+          `${toDecimalString(money(aperturaAsentada.balance, nuestra.currency))} y finAPI declara ` +
+          `${toDecimalString(apertura.cierreDeclarado)}. El informe diría que cuadra y no cuadra: ` +
+          'no se guarda una importación que no se puede sostener.',
+      )
+    }
+  }
 
   await markFeedAccountSynced(client, PROVEEDOR, input.externalAccountId)
 
@@ -361,6 +457,18 @@ export async function sincronizarCuenta(
     duplicates: guardado.duplicates,
     needsReview: guardado.needsReview,
     report,
+    apertura:
+      apertura === null || aperturaAsentada === null
+        ? null
+        : {
+            entryId: aperturaAsentada.entryId,
+            outcome: aperturaAsentada.outcome,
+            importe: toDecimalString(money(aperturaAsentada.amount, nuestra.currency)),
+            importeAnterior: toDecimalString(
+              money(aperturaAsentada.previousAmount, nuestra.currency),
+            ),
+            fecha: apertura.fecha,
+          },
     review: resultado.classified
       .filter((item) => item.verdict.kind === 'review')
       .map((item) => ({
@@ -368,6 +476,130 @@ export async function sincronizarCuenta(
         bookedOn: item.incoming.bookedOn,
         description: item.incoming.description,
       })),
+  }
+}
+
+/* ── La apertura ──────────────────────────────────────────────────────────── */
+
+interface Apertura {
+  /**
+   * Lo que la cuenta tenía **antes** de la ventana descargada. Va al informe
+   * como apertura, y es lo que hace que el cierre calculado llegue al real.
+   */
+  readonly delInforme: Money
+  /**
+   * Importe TOTAL con el que tiene que quedar el asiento de apertura, no un
+   * incremento. Ver abajo por qué la diferencia es todo.
+   */
+  readonly importe: bigint
+  /** Día anterior al primer movimiento de la ventana. */
+  readonly fecha: string
+  /** El saldo que declara el banco. Todo esto sale de acá y de ningún otro sitio. */
+  readonly cierreDeclarado: Money
+}
+
+interface AperturaInput {
+  readonly statement: ParsedStatement
+  readonly sonda: PipelineResult
+  readonly accountId: string
+  readonly currency: string
+  /** Saldo del libro antes de esta sincronización, apertura vieja incluida. */
+  readonly saldoPrevio: Money
+  /** Importe del asiento de apertura que ya hubiera. Cero si no hay ninguno. */
+  readonly aperturaPrevia: bigint
+  readonly correcciones: Money
+  readonly primerMovimiento: string
+}
+
+/**
+ * Cuánta historia anterior a la ventana hace falta asentar.
+ *
+ * **Sólo cuando el banco declara saldo.** Si no lo declara devuelve null y no
+ * se inventa ninguna apertura: la reconciliación se queda en
+ * 'sin_saldo_declarado', que es la verdad. Derivar la apertura restando los
+ * movimientos de NUESTRO cierre calculado daría delta cero siempre y
+ * convertiría la comprobación en una tautología — sólo vale restar de un cierre
+ * que viene de fuera.
+ *
+ * ── Ajustar, no acumular ─────────────────────────────────────────────────────
+ *
+ * Acá es donde esto se rompe si se hace de la forma obvia. La cifra que la
+ * cuenta necesita antes de la ventana es `cierre declarado − movimientos de
+ * esta ventana`, y es tentador asentar eso directamente. Pero en la segunda
+ * sincronización los movimientos ya no son los mismos —entraron los del mes
+ * nuevo— y el resultado sería un segundo asiento por casi el mismo importe: la
+ * historia que falta contada dos veces, y el saldo al doble.
+ *
+ * Por eso lo que se asienta es un total y no un incremento: se calcula qué
+ * tiene que valer el asiento de apertura para que el libro entero llegue al
+ * saldo del banco, restándole lo que el libro ya tiene **sin contar la apertura
+ * vieja**. Si la primera sincronización dejó 23.772,06 y la segunda trae
+ * movimientos nuevos que el banco ya tenía contados en su saldo, el total sigue
+ * siendo 23.772,06 y no se toca nada. Si cambió —porque la ventana se movió,
+ * porque una fila se fue a revisión y no se asentó— el asiento se ajusta a la
+ * cifra nueva, en su sitio, sin crear otro.
+ */
+function aperturaNecesaria(input: AperturaInput): Apertura | null {
+  const cierre = input.statement.closingBalance
+  if (cierre === undefined) return null
+
+  // Los movimientos que esta importación mete en el libro: las filas nuevas
+  // más el desplazamiento de las correcciones en su sitio. Es exactamente lo
+  // que el informe enseña en la columna "movimientos".
+  const enElInforme = input.sonda.report.accounts.find(
+    (cuenta) => cuenta.accountId === input.accountId,
+  )
+  const movimientos = money(
+    (enElInforme?.movements.amount ?? 0n) + input.correcciones.amount,
+    input.currency,
+  )
+
+  // `cierre − movimientos`: lo que la cuenta tenía antes de la ventana.
+  const delInforme = openingEntryAmount(cierre.amount, movimientos)
+  // Y de ahí se descuenta lo que el libro ya tiene por su cuenta, para que lo
+  // que se escriba sea el total del asiento y no una capa más encima.
+  const saldoSinApertura = input.saldoPrevio.amount - input.aperturaPrevia
+
+  return {
+    delInforme,
+    importe: delInforme.amount - saldoSinApertura,
+    fecha: addDays(parsePlainDate(input.primerMovimiento), -1),
+    cierreDeclarado: cierre.amount,
+  }
+}
+
+/**
+ * El mismo extracto con un aviso que cuenta lo que se asentó de apertura.
+ *
+ * El aviso va al informe que se guarda con el lote, o sea a lo que alguien lee
+ * dentro de seis meses. Sin él, la columna "apertura" aparecería con una cifra
+ * que no estaba en ningún sitio del banco y nadie podría reconstruir de dónde
+ * salió. Es `info` y no `warning` a propósito: no es un problema, es el hecho
+ * de que la ventana descargada no es toda la historia de la cuenta.
+ */
+function conAvisoDeApertura(
+  statement: ParsedStatement,
+  apertura: Apertura | null,
+  aperturaPrevia: bigint,
+): ParsedStatement {
+  if (apertura === null || apertura.importe === aperturaPrevia) return statement
+
+  const importe = toDecimalString(money(apertura.importe, apertura.cierreDeclarado.currency))
+  const message =
+    aperturaPrevia === 0n
+      ? `La cuenta ya tenía saldo antes del primer movimiento descargado. Se asienta una ` +
+        `apertura de ${importe} ${apertura.cierreDeclarado.currency} con fecha ${apertura.fecha}, ` +
+        `contra 'Saldo de apertura', para que el libro llegue al saldo que declara el banco.`
+      : `La apertura de esta cuenta pasa de ` +
+        `${toDecimalString(money(aperturaPrevia, apertura.cierreDeclarado.currency))} a ${importe} ` +
+        `${apertura.cierreDeclarado.currency}: se ajusta el asiento que ya estaba, no se añade otro.`
+
+  return {
+    ...statement,
+    warnings: [
+      ...statement.warnings,
+      { severity: 'info', code: 'apertura_del_historico', message },
+    ],
   }
 }
 

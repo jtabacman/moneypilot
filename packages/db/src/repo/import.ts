@@ -23,9 +23,10 @@
  *     impide que dos importaciones simultáneas del mismo fichero pasen las dos.
  */
 
+import { createHash } from 'node:crypto'
 import { newEntryId, newImportBatchId, tryParsePlainDate } from '@moneypilot/core'
 import type { TenantClient } from '../client.js'
-import type { DataSource } from './read-ledger.js'
+import type { AccountKind, DataSource } from './read-ledger.js'
 
 export interface PersistableTransaction {
   readonly bookedOn: string
@@ -569,6 +570,345 @@ export async function updateBookedTransaction(
   }
 }
 
+/* ── Saldo de apertura ────────────────────────────────────────────────────── */
+
+/**
+ * Nombre base de la cuenta de patrimonio contra la que se asienta la apertura.
+ *
+ * La crea `provision_household` con cada hogar, y el sembrador la usa para lo
+ * mismo. No es una cuenta técnica escondida: es dónde vive la parte de la
+ * historia que el origen no trajo, y por eso tiene nombre de persona y aparece
+ * en el plan de cuentas.
+ */
+const OPENING_ACCOUNT_NAME = 'Saldo de apertura'
+
+/**
+ * Lo que lee alguien que se encuentra el asiento en el extracto.
+ *
+ * Es deliberadamente una frase y no un código: la apertura no es un ajuste
+ * invisible que cuadra los números, es la afirmación de que la cuenta ya tenía
+ * saldo antes del primer movimiento que se pudo descargar.
+ */
+export const OPENING_ENTRY_DESCRIPTION = 'Saldo anterior a la ventana descargada'
+
+/**
+ * Marca del asiento en `entry.external_id`.
+ *
+ * No es un identificador de banco y no puede chocar con uno: los del feed son
+ * números. Existe porque el dedup mira el origen y el identificador para
+ * decidir si dos filas son el mismo hecho — con esta marca, un movimiento del
+ * proveedor nunca considera candidata a la apertura en la pasada difusa
+ * (`isOtherProviderFact`), que es lo que la mantiene fuera de la cola de
+ * revisión aunque su importe coincida por casualidad con el de un movimiento.
+ */
+const OPENING_ENTRY_EXTERNAL_ID = 'moneypilot:apertura'
+
+/**
+ * La huella del asiento de apertura de una cuenta.
+ *
+ * No es una huella de transacción —no sale de `transactionFingerprint` ni
+ * podría: no hay fila que la produzca— sino una clave derivada de la cuenta.
+ * Que sea única por cuenta y que `entry_fingerprint_unique` sea único por
+ * (hogar, huella) es lo que garantiza, en la base y no en el código, que una
+ * cuenta no pueda acabar con dos aperturas: la segunda no entra.
+ */
+function openingFingerprint(accountId: string): string {
+  return createHash('sha256').update(`moneypilot/apertura/v1\n${accountId}\n`).digest('hex')
+}
+
+export interface OpeningEntryRow {
+  readonly entryId: string
+  /** Importe de la pata que cuelga de la cuenta del extracto. */
+  readonly amount: bigint
+  readonly bookedOn: string
+  /** El lote que la creó. Deshacerlo se la lleva. */
+  readonly batchId: string | null
+}
+
+/** La apertura que ya tiene la cuenta, o null si nunca se asentó ninguna. */
+export async function readOpeningEntry(
+  client: TenantClient,
+  accountId: string,
+): Promise<OpeningEntryRow | null> {
+  if (!UUID_RE.test(accountId)) {
+    throw new ImportPersistError(`accountId inválido: ${JSON.stringify(accountId)}`)
+  }
+  const { rows } = await client.query<{
+    id: string
+    booked_on: string
+    import_batch_id: string | null
+    amount: string | null
+  }>(
+    // `left join` y no `join`: si el asiento existe pero su pata contra esta
+    // cuenta no —alguien la movió a mano—, un `join` devolvería cero filas y
+    // quien llama creería que no hay apertura. Crearía una segunda, y la
+    // segunda rebotaría contra `entry_fingerprint_unique` con un error de
+    // Postgres que no explica nada. Mejor decir exactamente qué pasa.
+    `select e.id, to_char(e.booked_on, 'YYYY-MM-DD') as booked_on, e.import_batch_id,
+            p.amount::text as amount
+       from entry e
+       left join posting p on p.entry_id = e.id and p.account_id = $2::uuid
+      where e.fingerprint = $1`,
+    [openingFingerprint(accountId), accountId],
+  )
+  const row = rows[0]
+  if (row === undefined) return null
+  if (row.amount === null) {
+    throw new ImportPersistError(
+      `El asiento de apertura ${row.id} ya no tiene ninguna pata contra la cuenta ${accountId}: ` +
+        'hay que arreglarlo a mano antes de volver a sincronizar.',
+    )
+  }
+  return {
+    entryId: row.id,
+    amount: BigInt(row.amount),
+    bookedOn: row.booked_on,
+    batchId: row.import_batch_id,
+  }
+}
+
+export interface EnsureOpeningEntryInput {
+  readonly accountId: string
+  /** El lote que la crea. Deshacerlo tiene que llevarse también la apertura. */
+  readonly batchId: string | null
+  /**
+   * Importe **total** con el que tiene que quedar la apertura, no un
+   * incremento. Quien llama ya restó lo que el libro tiene: acá se escribe esa
+   * cifra, se cree o se ajuste la que había. Es la diferencia entre ajustar y
+   * acumular, y la razón de que sincronizar dos veces no duplique nada.
+   */
+  readonly amount: bigint
+  readonly currency: string
+  /** Día anterior al primer movimiento de la ventana descargada. */
+  readonly bookedOn: string
+  readonly source?: DataSource
+}
+
+export type OpeningEntryOutcome = 'created' | 'adjusted' | 'unchanged' | 'not_needed'
+
+export interface EnsureOpeningEntryResult {
+  readonly entryId: string | null
+  readonly outcome: OpeningEntryOutcome
+  readonly amount: bigint
+  readonly previousAmount: bigint
+  /**
+   * Saldo de la cuenta **releído de la base** después de escribir.
+   *
+   * Va de vuelta para que quien llama pueda contrastarlo contra el saldo que
+   * declaró el banco. Sin ese contraste, "delta 0,00" sería una afirmación
+   * sobre una resta que hicimos nosotros; con él, es una afirmación sobre lo
+   * que quedó guardado.
+   */
+  readonly balance: bigint
+}
+
+/**
+ * Asienta —o ajusta— la apertura de una cuenta contra 'Saldo de apertura'.
+ *
+ * Existe porque un feed entrega un recorte de historia: los últimos 24 meses de
+ * una cuenta que existe hace quince años no explican el saldo de hoy. Sin
+ * apertura, la reconciliación de cada cuenta sincronizada sale en rojo por la
+ * historia que nadie descargó, y eso se lee como "el producto está roto"
+ * cuando lo que falta es una cifra que sí se puede calcular.
+ *
+ * Tres propiedades, y las tres importan:
+ *
+ *  1. **Es un asiento normal.** Dos postings que suman cero, con descripción
+ *     legible y fecha propia. No hay un modo "ajuste" que esquive la partida
+ *     doble: si la apertura no balanceara, sería exactamente el agujero que el
+ *     libro existe para no tener.
+ *
+ *  2. **Hay como mucho una por cuenta, y se ajusta en su sitio.** La segunda
+ *     sincronización no crea otra: reescribe el importe de la que ya está. Si
+ *     creara una segunda, la diferencia entraría dos veces y el saldo se iría
+ *     al doble de la historia que falta. La unicidad no depende de que este
+ *     código se acuerde: la garantiza `entry_fingerprint_unique`.
+ *
+ *  3. **El importe lo decide quien llama, y tiene que venir de un saldo
+ *     declarado por el banco.** Derivarlo de nuestro propio cierre calculado
+ *     daría delta cero siempre y convertiría la comprobación en una
+ *     tautología. Acá no se calcula nada: se escribe lo que se pide y se
+ *     devuelve el saldo resultante para que se pueda comprobar.
+ *
+ * ── Dónde se rompe ───────────────────────────────────────────────────────────
+ *
+ * El asiento se queda en el lote que lo creó, aunque lo ajuste uno posterior —
+ * igual que `updateBookedTransaction`, y por el mismo motivo: moverlo al lote
+ * de la corrección haría que deshacer la importación original ya no se llevara
+ * lo que ella misma creó.
+ *
+ * La consecuencia es que deshacer un lote **posterior** deja la apertura
+ * dimensionada para movimientos que ya no están, y la cuenta vuelve a mostrar
+ * delta. Es visible y no silencioso, y la sincronización siguiente lo corrige
+ * sola porque la apertura se recalcula entera cada vez. Se prefiere eso a
+ * arrastrar la apertura de lote en lote, que dejaría lotes viejos imposibles
+ * de deshacer del todo.
+ */
+export async function ensureOpeningEntry(
+  client: TenantClient,
+  input: EnsureOpeningEntryInput,
+): Promise<EnsureOpeningEntryResult> {
+  const account = await loadAccount(client, input.accountId)
+  const currency = input.currency.trim().toUpperCase()
+  if (currency !== account.currency) {
+    throw new ImportPersistError(
+      `La apertura viene en ${currency} y la cuenta "${account.name}" está en ${account.currency}: ` +
+        'los dos postings de un asiento tienen que estar en la misma moneda para que balancee.',
+    )
+  }
+  if (tryParsePlainDate(input.bookedOn) === null) {
+    throw new ImportPersistError(
+      `bookedOn de la apertura no es una fecha YYYY-MM-DD: ${input.bookedOn}`,
+    )
+  }
+
+  const existing = await readOpeningEntry(client, input.accountId)
+
+  if (existing === null) {
+    if (input.amount === 0n) {
+      // Nada que absorber: la historia descargada explica el saldo entero. Un
+      // asiento de cero no diría nada y ensuciaría el extracto de la cuenta.
+      return {
+        entryId: null,
+        outcome: 'not_needed',
+        amount: 0n,
+        previousAmount: 0n,
+        balance: await accountBalance(client, input.accountId, currency),
+      }
+    }
+    const tenantId = await currentTenant(client)
+    const openingAccountId = await resolveSystemAccount(
+      client,
+      tenantId,
+      currency,
+      'equity',
+      OPENING_ACCOUNT_NAME,
+    )
+    const entryId = await bookTransaction(client, {
+      accountId: input.accountId,
+      batchId: input.batchId,
+      suspenseAccountId: openingAccountId,
+      source: input.source ?? 'api',
+      transaction: {
+        bookedOn: input.bookedOn,
+        description: OPENING_ENTRY_DESCRIPTION,
+        amount: input.amount,
+        currency,
+        fingerprint: openingFingerprint(input.accountId),
+        externalId: OPENING_ENTRY_EXTERNAL_ID,
+      },
+    })
+    return {
+      entryId,
+      outcome: 'created',
+      amount: input.amount,
+      previousAmount: 0n,
+      balance: await accountBalance(client, input.accountId, currency),
+    }
+  }
+
+  // La fecha sólo puede ir hacia atrás. Si una sincronización posterior trae
+  // movimientos más viejos, la apertura tiene que quedar antes que todos; si la
+  // ventana se acorta por el otro lado, moverla hacia adelante la dejaría en
+  // medio del histórico, después de movimientos que se supone que resume.
+  const bookedOn = input.bookedOn < existing.bookedOn ? input.bookedOn : existing.bookedOn
+  if (existing.amount === input.amount && bookedOn === existing.bookedOn) {
+    return {
+      entryId: existing.entryId,
+      outcome: 'unchanged',
+      amount: existing.amount,
+      previousAmount: existing.amount,
+      balance: await accountBalance(client, input.accountId, currency),
+    }
+  }
+
+  const { rows: patas } = await client.query<{
+    id: string
+    account_id: string
+    currency: string
+    base_amount: string | null
+  }>(
+    `select p.id::text as id, p.account_id, trim(p.currency) as currency,
+            p.base_amount::text as base_amount
+       from posting p
+      where p.entry_id = $1
+      order by p.ordinal`,
+    [existing.entryId],
+  )
+  const banco = patas.find((pata) => pata.account_id === input.accountId)
+  const contrapartidas = patas.filter((pata) => pata !== banco)
+  const contrapartida = contrapartidas[0]
+  if (banco === undefined || contrapartida === undefined || contrapartidas.length !== 1) {
+    // Alguien repartió la apertura a mano. Repartir el ajuste entre varias
+    // contrapartidas no es una decisión que pueda tomar una sincronización.
+    throw new ImportPersistError(
+      `La apertura ${existing.entryId} no tiene exactamente una pata contra la cuenta y una ` +
+        'contrapartida; hay que ajustarla a mano.',
+    )
+  }
+  for (const pata of patas) {
+    if (pata.base_amount !== null) {
+      // Mismo motivo que en `updateBookedTransaction`: el consolidado está
+      // congelado a su fecha y recalcularlo acá sería inventar una tasa.
+      throw new ImportPersistError(
+        `El posting ${pata.id} de la apertura ${existing.entryId} tiene una conversión congelada ` +
+          'a moneda de reporte; cambiar el importe la dejaría contradiciendo al asiento.',
+      )
+    }
+    if (pata.currency !== currency) {
+      throw new ImportPersistError(
+        `El posting ${pata.id} de la apertura está en ${pata.currency} y la cuenta en ${currency}.`,
+      )
+    }
+  }
+
+  await client.query('update entry set booked_on = $2::date where id = $1', [
+    existing.entryId,
+    bookedOn,
+  ])
+  // Los dos importes en la misma transacción y el de la contrapartida por
+  // negación del otro, igual que al insertar: es lo que garantiza que el
+  // asiento siga sumando cero después del ajuste.
+  await client.query('update posting set amount = $2 where id = $1', [
+    banco.id,
+    input.amount.toString(),
+  ])
+  await client.query('update posting set amount = $2 where id = $1', [
+    contrapartida.id,
+    (-input.amount).toString(),
+  ])
+
+  return {
+    entryId: existing.entryId,
+    outcome: 'adjusted',
+    amount: input.amount,
+    previousAmount: existing.amount,
+    balance: await accountBalance(client, input.accountId, currency),
+  }
+}
+
+/**
+ * Saldo de la cuenta en su propia moneda, releído de la base.
+ *
+ * Sólo los postings en la moneda de la cuenta, igual que la capa de lectura:
+ * mezclar divisas daría un número que no significa nada.
+ */
+async function accountBalance(
+  client: TenantClient,
+  accountId: string,
+  currency: string,
+): Promise<bigint> {
+  const { rows } = await client.query<{ saldo: string }>(
+    `select coalesce(sum(p.amount) filter (where trim(p.currency) = $2), 0)::text as saldo
+       from posting p
+      where p.account_id = $1::uuid`,
+    [accountId, currency],
+  )
+  // `::text` y `BigInt`: `sum()` sobre bigint devuelve numeric, y numeric por
+  // JSON pierde precisión en cuanto el saldo pasa de 2^53 unidades mínimas.
+  return BigInt(rows[0]?.saldo ?? '0')
+}
+
 export interface RevertImportResult {
   readonly removedEntries: number
   /**
@@ -873,10 +1213,10 @@ async function resolveSuspenseAccounts(
 
   return {
     outflow: needsOutflow
-      ? await resolveSuspense(client, tenantId, currency, 'expense', SUSPENSE_OUTFLOW_NAME)
+      ? await resolveSystemAccount(client, tenantId, currency, 'expense', SUSPENSE_OUTFLOW_NAME)
       : null,
     inflow: needsInflow
-      ? await resolveSuspense(client, tenantId, currency, 'income', SUSPENSE_INFLOW_NAME)
+      ? await resolveSystemAccount(client, tenantId, currency, 'income', SUSPENSE_INFLOW_NAME)
       : null,
   }
 }
@@ -907,17 +1247,24 @@ async function checkProvidedSuspense(
 }
 
 /**
+ * Una cuenta de sistema por nombre y moneda, creándola si no existe.
+ *
  * El nombre lleva la moneda porque `account_name_unique` es (hogar, nombre) y
  * cada cuenta tiene una sola moneda: un hogar con cuentas en euros y en dólares
  * necesita dos bolsas, y son dos cuentas distintas. Si ya existe una con el
- * nombre a secas en esa moneda —creada a mano por el cliente— se reutiliza esa
- * antes que crear una segunda.
+ * nombre a secas en esa moneda —creada a mano por el cliente, o por
+ * `provision_household` en el caso de la de apertura— se reutiliza esa antes
+ * que crear una segunda.
+ *
+ * Sirve para las dos bolsas de sin categorizar y para la de apertura, que
+ * resuelven el mismo problema: encontrar o crear la cuenta que el motor
+ * necesita para que el asiento cierre, sin pedírsela al usuario.
  */
-async function resolveSuspense(
+async function resolveSystemAccount(
   client: TenantClient,
   tenantId: string,
   currency: string,
-  kind: 'expense' | 'income',
+  kind: AccountKind,
   baseName: string,
 ): Promise<string> {
   const perCurrencyName = `${baseName} (${currency})`
