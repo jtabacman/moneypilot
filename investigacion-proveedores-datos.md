@@ -434,3 +434,72 @@ Pasar un `redirectUrl` devuelve `INVALID_REDIRECT_URL: mandator's license is UNL
 **No cambia la decisión**: seguimos con extractos. La prueba confirmó la fontanería y **desmintió la cobertura**, que era la duda que importaba.
 
 **Sí cambia la pregunta del correo.** Ya no es "¿cuánto cuesta España?" sino: *vuestro tarifario vende España como país adicional a €20/mes, y vuestro catálogo de sandbox no tiene ni un banco minorista español. ¿Qué entidades españolas son alcanzables en producción, por qué interfaz, y con qué cobertura de tarjetas de crédito?* Con esa respuesta se decide; sin ella, no.
+
+---
+
+## 12. El enriquecimiento que finAPI ya incluye, medido (13-08-2026)
+
+La pregunta era si hace falta comprar enriquecimiento aparte cuando el
+agregador ya trae categorías. Medido sobre los 1.612 movimientos reales del
+sandbox, no leído en su web.
+
+### 12.1 La categorización existe y es buena
+
+**1.542 de 1.612 movimientos llegan categorizados: el 95,7%** `[V]`. Usa 23
+categorías de un catálogo de 79, jerárquico, con 12 raíces: Mobilität,
+Einnahmen, Bank & Kredit, Gesundheit & Wellness, Freizeit, Kinder, Shopping,
+Lebenshaltung, Reisen, Versicherung, Wohnen, Sparen & Anlegen `[V]`.
+
+Para lo que entra por sus conexiones, **el enriquecimiento no hay que
+comprarlo**: viene con Access.
+
+### 12.2 Pero la taxonomía es alemana
+
+Las categorías son las de arriba, en alemán, y resuelven descriptor→comercio y
+comercio→**su** categoría. No resuelven comercio→**tu estructura**, que es
+donde está el producto: ningún proveedor sabe que esa factura de luz es de
+Casa Madrid, pagada por la sociedad y repartida 60/40.
+
+### 12.3 No hay MCC, y hay una razón de fondo
+
+Los campos de una transacción son exactamente éstos `[V]`:
+
+    accountId · amount · bankBookingDate · category · cleanedPurpose ·
+    counterpartAccountNumber · counterpartBankName · counterpartBic ·
+    counterpartBlz · counterpartIban · counterpartName · currency ·
+    finapiBookingDate · id · importDate · isAdjustingEntry · isNew ·
+    isPotentialDuplicate · labels · purpose · type · typeCodeZka · valueDate
+
+**Ni un campo de MCC ni nada equivalente.** Y no es un olvido suyo: el
+*merchant category code* viaja por la red de tarjetas, no por el extracto
+bancario. Un emisor de tarjetas lo tiene; quien lee cuentas por PSD2 o FinTS,
+no. **La vía barata de "MCC + tabla de búsqueda" no existe para nuestro tipo
+de dato** — sólo existiría si algún día emitiéramos tarjeta, que no está en el
+producto.
+
+### 12.4 Y no sirve como enriquecedor puro
+
+La pregunta que decidía si finAPI vale para todo el producto o sólo para donde
+usemos su agregación: ¿se pueden meter movimientos que vienen de un fichero y
+que los categorice?
+
+    POST /api/v2/bankConnections  → 405 Method Not Allowed  [V]
+    POST /api/v2/accounts         → 405 Method Not Allowed  [V]
+
+**No.** No se pueden crear cuentas ni conexiones manuales, así que su motor
+sólo ve lo que entra por sus propias conexiones. Existe
+`POST /api/v2/transactions/triggerCategorization`, que responde 200 `[V]`,
+pero opera sobre los movimientos que ya tiene el usuario — no es un endpoint
+de enriquecimiento bajo demanda.
+
+### 12.5 Qué significa para la decisión
+
+| Camino de entrada | ¿Categoriza finAPI? |
+|---|---|
+| Conexión de finAPI (Alemania y sus 13 países) | **Sí, 95,7%, en alemán** `[V]` |
+| Fichero OFX/QFX/QIF/CSV/Norma 43 | **No.** No acepta el dato `[V]` |
+| Tier Archivo (49 USD, sin conexiones) | **No**, por lo mismo |
+
+Es decir: el enriquecimiento incluido es un extra **donde ya usemos su
+agregación**, y no cubre ni el camino de fichero ni España. El motor propio no
+es un puente hasta comprar algo: es el suelo permanente del producto.
