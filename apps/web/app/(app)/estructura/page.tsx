@@ -46,20 +46,21 @@ export default async function EstructuraPage() {
 
   const { session, data } = await readHousehold(async (client, sesion) => {
     const rango = { from: periodo.from, to: periodo.to, currency: sesion.baseCurrency }
-    const [serie, atribucion, entidades, personas, liquidez, cuentas, obligaciones, dimensiones] =
-      await Promise.all([
-        netWorthSeries(client, rango),
-        netWorthAttribution(client, rango),
-        spendByDimension(client, { ...rango, dimensionKey: 'entidad' }),
-        spendByDimension(client, { ...rango, dimensionKey: 'persona' }),
-        liquidityByCurrency(client),
-        accountBalances(client),
-        recurring(client, { asOf, lookbackMonths: 12 }),
-        // Sólo para saber si la dimensión EXISTE. Una tabla vacía porque nadie
-        // etiquetó nada y una tabla vacía porque el hogar no tiene esa
-        // dimensión son dos estados distintos, y sin esto se ven igual.
-        dimensionsWithValues(client),
-      ])
+    // En serie: las ocho van por el mismo cliente —una transacción, una
+    // conexión—, así que pg las encola igual. Promise.all daba paralelismo
+    // aparente y un aviso de query concurrente sobre un cliente ocupado, que
+    // en pg@9 será un error.
+    const serie = await netWorthSeries(client, rango)
+    const atribucion = await netWorthAttribution(client, rango)
+    const entidades = await spendByDimension(client, { ...rango, dimensionKey: 'entidad' })
+    const personas = await spendByDimension(client, { ...rango, dimensionKey: 'persona' })
+    const liquidez = await liquidityByCurrency(client)
+    const cuentas = await accountBalances(client)
+    const obligaciones = await recurring(client, { asOf, lookbackMonths: 12 })
+    // Sólo para saber si la dimensión EXISTE. Una tabla vacía porque nadie
+    // etiquetó nada y una tabla vacía porque el hogar no tiene esa dimensión
+    // son dos estados distintos, y sin esto se ven igual.
+    const dimensiones = await dimensionsWithValues(client)
     return { serie, atribucion, entidades, personas, liquidez, cuentas, obligaciones, dimensiones }
   })
 

@@ -52,12 +52,14 @@ export default async function HoyPage() {
 
   const { data } = await readHousehold(async (client) => {
     // Una sola transacción y una sola ida a la base: las tres lecturas son
-    // independientes entre sí y ninguna depende del resultado de otra.
-    const [cuentas, recurrentes, pendientes] = await Promise.all([
-      accountBalances(client, { asOf: hoy }),
-      recurring(client, { asOf: hoy }),
-      reviewQueue(client, { state: 'pendiente', limit: TOPE_COLA }),
-    ])
+    // independientes entre sí y ninguna depende del resultado de otra. Aun
+    // así van en serie, porque comparten cliente —una transacción, una
+    // conexión— y pg las encola igual: Promise.all daba paralelismo aparente y
+    // un aviso de query concurrente sobre un cliente ocupado, que en pg@9 será
+    // un error.
+    const cuentas = await accountBalances(client, { asOf: hoy })
+    const recurrentes = await recurring(client, { asOf: hoy })
+    const pendientes = await reviewQueue(client, { state: 'pendiente', limit: TOPE_COLA })
     return { cuentas, recurrentes, pendientes }
   })
 

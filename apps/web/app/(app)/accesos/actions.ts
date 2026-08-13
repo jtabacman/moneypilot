@@ -95,38 +95,40 @@ function comoEstado(valor: string): EstadoAcceso {
  */
 export async function listarAccesos(): Promise<PanelAccesos> {
   const { session, data } = await readHousehold(async (client) => {
-    const [accesos, policies] = await Promise.all([
-      client.query<AccesoRow>(
-        `select m.id,
-                m.role::text as role,
-                m.email,
-                m.user_id,
-                to_char(m.created_at, 'YYYY-MM-DD') as created_on,
-                to_char(m.expires_at, 'YYYY-MM-DD') as expires_on,
-                to_char(m.revoked_at, 'YYYY-MM-DD') as revoked_on,
-                case
-                  when m.revoked_at is not null                    then 'revocada'
-                  when m.expires_at is null                        then 'sin-caducidad'
-                  when m.expires_at <= now()                       then 'caducada'
-                  when m.expires_at <= now() + interval '14 days'  then 'por-caducar'
-                  else 'activa'
-                end as estado,
-                case
-                  when m.expires_at is null or m.expires_at <= now() then null
-                  else ceil(extract(epoch from (m.expires_at - now())) / 86400)::int
-                end as dias,
-                (m.user_id = nullif(current_setting('app.user_id', true), '')::uuid) as soy_yo
-           from membership m
-          where m.tenant_id = app_current_tenant()
-          order by (m.revoked_at is not null), m.role, m.created_at`,
-      ),
-      client.query<PolicyRow>(
-        `select policyname, cmd, qual
-           from pg_policies
-          where schemaname = 'public' and tablename = 'membership'
-          order by policyname`,
-      ),
-    ])
+    // En serie: las dos van por el mismo cliente —una transacción, una
+    // conexión—, así que pg las encola igual. Promise.all daba paralelismo
+    // aparente y un aviso de query concurrente sobre un cliente ocupado, que
+    // en pg@9 será un error.
+    const accesos = await client.query<AccesoRow>(
+      `select m.id,
+              m.role::text as role,
+              m.email,
+              m.user_id,
+              to_char(m.created_at, 'YYYY-MM-DD') as created_on,
+              to_char(m.expires_at, 'YYYY-MM-DD') as expires_on,
+              to_char(m.revoked_at, 'YYYY-MM-DD') as revoked_on,
+              case
+                when m.revoked_at is not null                    then 'revocada'
+                when m.expires_at is null                        then 'sin-caducidad'
+                when m.expires_at <= now()                       then 'caducada'
+                when m.expires_at <= now() + interval '14 days'  then 'por-caducar'
+                else 'activa'
+              end as estado,
+              case
+                when m.expires_at is null or m.expires_at <= now() then null
+                else ceil(extract(epoch from (m.expires_at - now())) / 86400)::int
+              end as dias,
+              (m.user_id = nullif(current_setting('app.user_id', true), '')::uuid) as soy_yo
+         from membership m
+        where m.tenant_id = app_current_tenant()
+        order by (m.revoked_at is not null), m.role, m.created_at`,
+    )
+    const policies = await client.query<PolicyRow>(
+      `select policyname, cmd, qual
+         from pg_policies
+        where schemaname = 'public' and tablename = 'membership'
+        order by policyname`,
+    )
 
     return { accesos: accesos.rows, policies: policies.rows }
   })

@@ -27,12 +27,14 @@ const EJEMPLO: Readonly<Record<string, string>> = {
 
 export default async function DimensionesPage() {
   const { session, data } = await readHousehold(async (client) => {
-    const [dimensiones, muestra] = await Promise.all([
-      dimensionsWithValues(client),
-      // Sólo para saber si el hogar tiene historia cargada. El listado no se
-      // usa: pedir una fila es más barato que pedir los saldos de todo.
-      movements(client, { limit: 1 }),
-    ])
+    // En serie: las dos van por el mismo cliente —una transacción, una
+    // conexión—, así que pg las encola igual. Promise.all daba paralelismo
+    // aparente y un aviso de query concurrente sobre un cliente ocupado, que
+    // en pg@9 será un error.
+    const dimensiones = await dimensionsWithValues(client)
+    // Sólo para saber si el hogar tiene historia cargada. El listado no se
+    // usa: pedir una fila es más barato que pedir los saldos de todo.
+    const muestra = await movements(client, { limit: 1 })
     return { dimensiones, movimientos: muestra.total }
   })
 

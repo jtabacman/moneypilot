@@ -111,52 +111,56 @@ interface LoteRow {
 
 export async function leerAjustes(): Promise<PanelAjustes> {
   const { session, data } = await readHousehold(async (client) => {
-    const [hogar, resumen, monedas, fuentes, tasas, ejemplo, lotes] = await Promise.all([
-      client.query<HogarRow>(
-        `select name, base_currency, to_char(created_at, 'YYYY-MM-DD') as created_on
-           from tenant
-          where id = app_current_tenant()`,
-      ),
-      client.query<ResumenRow>(
-        `select count(*)::int                                          as postings,
-                count(distinct entry_id)::int                          as asientos,
-                count(*) filter (where base_amount is null)::int       as sin_base,
-                count(*) filter (where fx_numerator is not null)::int  as con_tasa
-           from posting`,
-      ),
-      client.query<MonedaRow>(
-        `select base_currency,
-                count(*)::int                                         as postings,
-                count(*) filter (where fx_numerator is not null)::int  as con_tasa,
-                to_char(min(fx_as_of), 'YYYY-MM-DD') as desde,
-                to_char(max(fx_as_of), 'YYYY-MM-DD') as hasta
-           from posting
-          where base_amount is not null
-          group by base_currency
-          order by count(*) desc`,
-      ),
-      client.query<FuenteRow>(
-        `select fx_source as fuente, count(*)::int as postings
-           from posting
-          where fx_numerator is not null
-          group by fx_source
-          order by count(*) desc`,
-      ),
-      // fx_rate es global y de sólo lectura para la aplicación: no lleva
-      // tenant_id ni policy, así que este número es del sistema, no del hogar.
-      client.query<{ tasas: number }>('select count(*)::int as tasas from fx_rate'),
-      hasDemoData(client),
-      // El lote del ejemplo se reconoce por su formato, que ningún importador
-      // real produce. `hasDemoData` sigue siendo la autoridad sobre si está
-      // cargado; esto es sólo el detalle para poder contarlo.
-      client.query<LoteRow>(
-        `select imported, status::text as estado, to_char(created_at, 'YYYY-MM-DD') as creado
-           from import_batch
-          where format = 'seed'
-          order by created_at desc
-          limit 1`,
-      ),
-    ])
+    // En serie: las siete van por el mismo cliente —una transacción, una
+    // conexión—, así que pg las encola igual. Promise.all daba paralelismo
+    // aparente y un aviso de query concurrente sobre un cliente ocupado, que
+    // en pg@9 será un error.
+    const hogar = await client.query<HogarRow>(
+      `select name, base_currency, to_char(created_at, 'YYYY-MM-DD') as created_on
+         from tenant
+        where id = app_current_tenant()`,
+    )
+    const resumen = await client.query<ResumenRow>(
+      `select count(*)::int                                          as postings,
+              count(distinct entry_id)::int                          as asientos,
+              count(*) filter (where base_amount is null)::int       as sin_base,
+              count(*) filter (where fx_numerator is not null)::int  as con_tasa
+         from posting`,
+    )
+    const monedas = await client.query<MonedaRow>(
+      `select base_currency,
+              count(*)::int                                         as postings,
+              count(*) filter (where fx_numerator is not null)::int  as con_tasa,
+              to_char(min(fx_as_of), 'YYYY-MM-DD') as desde,
+              to_char(max(fx_as_of), 'YYYY-MM-DD') as hasta
+         from posting
+        where base_amount is not null
+        group by base_currency
+        order by count(*) desc`,
+    )
+    const fuentes = await client.query<FuenteRow>(
+      `select fx_source as fuente, count(*)::int as postings
+         from posting
+        where fx_numerator is not null
+        group by fx_source
+        order by count(*) desc`,
+    )
+    // fx_rate es global y de sólo lectura para la aplicación: no lleva
+    // tenant_id ni policy, así que este número es del sistema, no del hogar.
+    const tasas = await client.query<{ tasas: number }>(
+      'select count(*)::int as tasas from fx_rate',
+    )
+    const ejemplo = await hasDemoData(client)
+    // El lote del ejemplo se reconoce por su formato, que ningún importador
+    // real produce. `hasDemoData` sigue siendo la autoridad sobre si está
+    // cargado; esto es sólo el detalle para poder contarlo.
+    const lotes = await client.query<LoteRow>(
+      `select imported, status::text as estado, to_char(created_at, 'YYYY-MM-DD') as creado
+         from import_batch
+        where format = 'seed'
+        order by created_at desc
+        limit 1`,
+    )
 
     return {
       hogar: hogar.rows[0],

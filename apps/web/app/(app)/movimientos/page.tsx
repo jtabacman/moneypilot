@@ -74,15 +74,19 @@ export default async function MovimientosPage({
   const parte = leerResultado(entrada)
 
   const { session, data } = await readHousehold(async (client, sesion) => {
-    const [pagina, cuentas, categorias, dimensiones, conTraspasos] = await Promise.all([
-      movements(client, { ...filtro, limit: PAGE_SIZE, offset }),
-      accountBalances(client),
-      categoryTree(client),
-      dimensionsWithValues(client),
-      // Cuántas patas de traspaso deja fuera el filtro. Sin este número la
-      // lista escondería filas sin decirlo, que es justo lo que no hacemos.
-      f.traspasos ? null : movements(client, { ...filtro, includeTransfers: true, limit: 1 }),
-    ])
+    // En serie: todas van por el mismo cliente —una transacción, una
+    // conexión—, así que pg las encola igual. Promise.all daba paralelismo
+    // aparente y un aviso de query concurrente sobre un cliente ocupado, que
+    // en pg@9 será un error. Es además lo que ya hacen las lecturas de abajo.
+    const pagina = await movements(client, { ...filtro, limit: PAGE_SIZE, offset })
+    const cuentas = await accountBalances(client)
+    const categorias = await categoryTree(client)
+    const dimensiones = await dimensionsWithValues(client)
+    // Cuántas patas de traspaso deja fuera el filtro. Sin este número la
+    // lista escondería filas sin decirlo, que es justo lo que no hacemos.
+    const conTraspasos = f.traspasos
+      ? null
+      : await movements(client, { ...filtro, includeTransfers: true, limit: 1 })
 
     // Las bolsas del importador, y cuánto queda dentro de ellas CON los filtros
     // puestos. Se cuenta con el mismo filtro que lleva el enlace del aviso

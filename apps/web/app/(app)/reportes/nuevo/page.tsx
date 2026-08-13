@@ -77,12 +77,14 @@ export default async function Nuevo({
   const noEncontrada = idPedido !== '' && elegida === undefined
 
   const { session, data } = await readHousehold(async (client) => {
-    const [muestra, dimensiones, cuentas, categorias] = await Promise.all([
-      movements(client, { limit: 1 }),
-      dimensionsWithValues(client),
-      accountBalances(client),
-      categoryTree(client),
-    ])
+    // En serie: las cuatro van por el mismo cliente —una transacción, una
+    // conexión—, así que pg las encola igual. Promise.all daba paralelismo
+    // aparente y un aviso de query concurrente sobre un cliente ocupado, que
+    // en pg@9 será un error.
+    const muestra = await movements(client, { limit: 1 })
+    const dimensiones = await dimensionsWithValues(client)
+    const cuentas = await accountBalances(client)
+    const categorias = await categoryTree(client)
     return { muestra, dimensiones, cuentas, categorias }
   })
 

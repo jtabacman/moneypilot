@@ -196,23 +196,29 @@ export default async function Cierre({
 
   const { session, data } = await readHousehold(async (client, sesion) => {
     const moneda = sesion.baseCurrency
-    const [hay, recon, cuentas, mesActual, mesAnterior, acumulado, gasto, categorias, lotes, cola] =
-      await Promise.all([
-        movements(client, { limit: 1 }),
-        reconciliation(client, { from, to }),
-        accountBalances(client),
-        totals(client, { from, to, currency: moneda }),
-        totals(client, {
-          from: firstDayOfMonth(anterior),
-          to: lastDayOfMonth(anterior),
-          currency: moneda,
-        }),
-        totals(client, { from: inicioAnio, to, currency: moneda }),
-        spendByCategoryMonth(client, { from: desdeGasto, to, currency: moneda, depth: 1 }),
-        categoryTree(client),
-        listImportBatches(client, TOPE_LOTES),
-        reviewQueue(client, { state: 'pendiente', limit: TOPE_COLA }),
-      ])
+    // En serie: las diez van por el mismo cliente —una transacción, una
+    // conexión—, así que pg las encola igual. Promise.all daba paralelismo
+    // aparente y un aviso de query concurrente sobre un cliente ocupado, que
+    // en pg@9 será un error. Es además lo que ya hace la lectura de abajo.
+    const hay = await movements(client, { limit: 1 })
+    const recon = await reconciliation(client, { from, to })
+    const cuentas = await accountBalances(client)
+    const mesActual = await totals(client, { from, to, currency: moneda })
+    const mesAnterior = await totals(client, {
+      from: firstDayOfMonth(anterior),
+      to: lastDayOfMonth(anterior),
+      currency: moneda,
+    })
+    const acumulado = await totals(client, { from: inicioAnio, to, currency: moneda })
+    const gasto = await spendByCategoryMonth(client, {
+      from: desdeGasto,
+      to,
+      currency: moneda,
+      depth: 1,
+    })
+    const categorias = await categoryTree(client)
+    const lotes = await listImportBatches(client, TOPE_LOTES)
+    const cola = await reviewQueue(client, { state: 'pendiente', limit: TOPE_COLA })
 
     // Las bolsas de sin categorizar son cuentas como cualquier otra: hay que
     // resolverlas antes de poder pedir sus movimientos. Son dos y no una — el

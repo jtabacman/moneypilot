@@ -61,11 +61,13 @@ export async function prepararEditor(
   params: QueryParams,
   regla: RuleRow | null,
 ): Promise<DatosEditor> {
-  const [cuentas, categorias, dimensiones] = await Promise.all([
-    accountBalances(client),
-    categoryTree(client),
-    dimensionsWithValues(client),
-  ])
+  // En serie: las tres van por el mismo cliente —una transacción, una
+  // conexión—, así que pg las encola igual. Promise.all daba paralelismo
+  // aparente y un aviso de query concurrente sobre un cliente ocupado, que en
+  // pg@9 será un error.
+  const cuentas = await accountBalances(client)
+  const categorias = await categoryTree(client)
+  const dimensiones = await dimensionsWithValues(client)
 
   const monedaDe = (accountId: string | null): string | null =>
     accountId === null

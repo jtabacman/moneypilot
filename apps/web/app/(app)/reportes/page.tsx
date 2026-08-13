@@ -136,32 +136,31 @@ export default async function Reportes() {
 
   const { session, data } = await readHousehold(async (client, sesion) => {
     const moneda = sesion.baseCurrency
-    const [
-      muestra,
-      dimensiones,
-      cuentas,
-      categorias,
-      propiedades,
-      recon,
-      liquidez,
-      patrimonio,
-      obligaciones,
-    ] = await Promise.all([
-      movements(client, { limit: 1 }),
-      dimensionsWithValues(client),
-      accountBalances(client),
-      categoryTree(client),
-      spendByDimension(client, {
-        dimensionKey: 'propiedad',
-        from: doce.from,
-        to: doce.to,
-        currency: moneda,
-      }),
-      reconciliation(client, { from: firstDayOfMonth(mesCerrado), to: lastDayOfMonth(mesCerrado) }),
-      liquidityByCurrency(client),
-      netWorthAttribution(client, { from: `${hoy.slice(0, 4)}-01-01`, to: hoy, currency: moneda }),
-      recurring(client, { asOf: hoy }),
-    ])
+    // En serie: las nueve van por el mismo cliente —una transacción, una
+    // conexión—, así que pg las encola igual. Promise.all daba paralelismo
+    // aparente y un aviso de query concurrente sobre un cliente ocupado, que
+    // en pg@9 será un error.
+    const muestra = await movements(client, { limit: 1 })
+    const dimensiones = await dimensionsWithValues(client)
+    const cuentas = await accountBalances(client)
+    const categorias = await categoryTree(client)
+    const propiedades = await spendByDimension(client, {
+      dimensionKey: 'propiedad',
+      from: doce.from,
+      to: doce.to,
+      currency: moneda,
+    })
+    const recon = await reconciliation(client, {
+      from: firstDayOfMonth(mesCerrado),
+      to: lastDayOfMonth(mesCerrado),
+    })
+    const liquidez = await liquidityByCurrency(client)
+    const patrimonio = await netWorthAttribution(client, {
+      from: `${hoy.slice(0, 4)}-01-01`,
+      to: hoy,
+      currency: moneda,
+    })
+    const obligaciones = await recurring(client, { asOf: hoy })
     return {
       muestra,
       dimensiones,

@@ -29,11 +29,13 @@ const COMERCIOS = 15
 
 export default async function ReglasPage() {
   const { session, data } = await readHousehold(async (client) => {
-    const [reglas, cuentas, pendiente] = await Promise.all([
-      listRules(client),
-      accountBalances(client),
-      uncategorized(client, { limit: COMERCIOS }),
-    ])
+    // En serie: las tres van por el mismo cliente —una transacción, una
+    // conexión—, así que pg las encola igual. Promise.all daba paralelismo
+    // aparente y un aviso de query concurrente sobre un cliente ocupado, que
+    // en pg@9 será un error.
+    const reglas = await listRules(client)
+    const cuentas = await accountBalances(client)
+    const pendiente = await uncategorized(client, { limit: COMERCIOS })
 
     // Una consulta por regla, en serie. Son decenas —no miles— y el número que
     // devuelven es justamente el que convierte la lista en algo accionable; si

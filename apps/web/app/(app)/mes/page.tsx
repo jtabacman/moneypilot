@@ -60,46 +60,43 @@ export default async function MesPage({
   // y el promedio (los 12 meses ANTERIORES al elegido, que no incluyen a este).
   const { data } = await readHousehold(async (client, session) => {
     const moneda = session.baseCurrency
-    const [
-      hay,
-      mesTotales,
-      previoTotales,
-      categorias,
-      arbol,
-      comercios,
-      descriptores,
-      propiedades,
-      dimensiones,
-    ] = await Promise.all([
-      movements(client, { limit: 1 }),
-      totals(client, { from: desde, to: hasta, currency: moneda }),
-      totals(client, {
-        from: firstDayOfMonth(mesPrevio),
-        to: lastDayOfMonth(mesPrevio),
-        currency: moneda,
-      }),
-      spendByCategoryMonth(client, {
-        from: firstDayOfMonth(addMonths(mes, -12)),
-        to: hasta,
-        currency: moneda,
-        depth: 1,
-      }),
-      categoryTree(client),
-      topMerchants(client, { from: desde, to: hasta, currency: moneda, limit: 10 }),
-      movements(client, {
-        from: desde,
-        to: hasta,
-        includeTransfers: false,
-        limit: VENTANA_DESCRIPTORES,
-      }),
-      spendByDimension(client, {
-        dimensionKey: 'propiedad',
-        from: desde,
-        to: hasta,
-        currency: moneda,
-      }),
-      dimensionsWithValues(client),
-    ])
+    // En serie: las nueve van por el mismo cliente —una transacción, una
+    // conexión—, así que pg las encola igual. Promise.all daba paralelismo
+    // aparente y un aviso de query concurrente sobre un cliente ocupado, que
+    // en pg@9 será un error.
+    const hay = await movements(client, { limit: 1 })
+    const mesTotales = await totals(client, { from: desde, to: hasta, currency: moneda })
+    const previoTotales = await totals(client, {
+      from: firstDayOfMonth(mesPrevio),
+      to: lastDayOfMonth(mesPrevio),
+      currency: moneda,
+    })
+    const categorias = await spendByCategoryMonth(client, {
+      from: firstDayOfMonth(addMonths(mes, -12)),
+      to: hasta,
+      currency: moneda,
+      depth: 1,
+    })
+    const arbol = await categoryTree(client)
+    const comercios = await topMerchants(client, {
+      from: desde,
+      to: hasta,
+      currency: moneda,
+      limit: 10,
+    })
+    const descriptores = await movements(client, {
+      from: desde,
+      to: hasta,
+      includeTransfers: false,
+      limit: VENTANA_DESCRIPTORES,
+    })
+    const propiedades = await spendByDimension(client, {
+      dimensionKey: 'propiedad',
+      from: desde,
+      to: hasta,
+      currency: moneda,
+    })
+    const dimensiones = await dimensionsWithValues(client)
     return {
       moneda,
       vacio: hay.total === 0,

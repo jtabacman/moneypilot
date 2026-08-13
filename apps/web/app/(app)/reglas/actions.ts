@@ -133,10 +133,12 @@ async function guardar(
         return { estado: propuesta(porQueNoEscribe(session.role)), aplicado: false }
       }
 
-      const [cuentas, dimensiones] = await Promise.all([
-        accountBalances(client),
-        dimensionsWithValues(client),
-      ])
+      // En serie: las dos van por el mismo cliente —una transacción, una
+      // conexión—, así que pg las encola igual. Promise.all daba paralelismo
+      // aparente y un aviso de query concurrente sobre un cliente ocupado, que
+      // en pg@9 será un error.
+      const cuentas = await accountBalances(client)
+      const dimensiones = await dimensionsWithValues(client)
       const criterios = leerCriterios(camposDeForm(form), {
         dimensionIds: dimensiones.map((dim) => dim.id),
       })

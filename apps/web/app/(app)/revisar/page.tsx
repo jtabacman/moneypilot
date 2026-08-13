@@ -29,10 +29,12 @@ const TOPE = 200
 
 export default async function RevisarPage() {
   const { session, data } = await readHousehold(async (client) => {
-    const [cola, cuentas] = await Promise.all([
-      reviewQueue(client, { limit: TOPE }),
-      accountBalances(client),
-    ])
+    // En serie: las dos van por el mismo cliente —una transacción, una
+    // conexión—, así que pg las encola igual. Promise.all daba paralelismo
+    // aparente y un aviso de query concurrente sobre un cliente ocupado, que
+    // en pg@9 será un error.
+    const cola = await reviewQueue(client, { limit: TOPE })
+    const cuentas = await accountBalances(client)
     return { cola, cuentas }
   })
 
