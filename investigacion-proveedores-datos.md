@@ -367,3 +367,56 @@ Se dice para que nadie lo lea como verificado dentro de tres meses.
 | Redsys (como entidad), registro del BdE, eIDAS, la cifra del 66% de NSI | **No reverificados en esta pasada** | Ídem |
 
 **Nota de reproducibilidad, para quien repita esto:** el PDF de códigos de CaixaBank **devuelve 403 sin User-Agent de navegador**; con UA de Chrome descarga sin problema `[V]`. Y una advertencia de método que costó una corrección: un fichero guardado como "evidencia" que resulta ser el bundle de JavaScript de Stripe **no prueba nada**, aunque la cita que lo acompaña sea correcta. La evidencia es el texto renderizado, con su URL y su fecha.
+
+---
+
+## 11. Prueba de campo contra el sandbox de finAPI (13-08-2026)
+
+Con credenciales de sandbox propias se corrió el flujo entero: token de cliente → alta de usuario → Web Form → autenticación fuerte → importación. **Funcionó**: 4 cuentas y **1.612 movimientos** de 24 meses de histórico `[V]`. Lo que sigue está observado, no leído.
+
+### 11.1 La forma del dato encaja mejor que un fichero
+
+Un movimiento real, campo por campo `[V]`:
+
+| Campo de finAPI | Qué es | Dónde encaja en nuestro esquema |
+|---|---|---|
+| `id` | Identificador estable del movimiento | `entry.external_id`, y **la clave de dedup para `data_source='api'`** (tarea #25) |
+| `bankBookingDate` / `valueDate` | Fecha contable y fecha valor, distintas | `entry.booked_on` y `entry.valued_on` — la distinción ya está modelada |
+| `finapiBookingDate` | Fecha propia del agregador | No se usa: es su reloj, no el del banco |
+| `amount` + `currency` | Importe y moneda | `posting.amount` — **con la salvedad de 11.3** |
+| `counterpartName`, `counterpartIban`, `counterpartBic`, `counterpartBankName` | **Contraparte estructurada** | Es la mejora grande: la Norma 43 da una cadena de concepto, esto da campos |
+| `purpose` y `cleanedPurpose` | Concepto crudo y normalizado por ellos | El descriptor ya viene limpio |
+| `type`, `typeCodeZka` | Tipo de operación con código | Señal para el matcher de transferencias |
+| `category` | **Su categorización, con jerarquía** | Ver 11.4 |
+| `isPotentialDuplicate` | Su propia detección de duplicados | Hay que reconciliarla con la nuestra, no ignorarla |
+| `isNew` | Marca de sincronización incremental | Permite traer sólo lo nuevo |
+
+**La contraparte con IBAN es mejor clave de comercio que cualquier descriptor.** Un IBAN es estable; "IBERDROLA CLIENTE 887" no.
+
+### 11.2 Todo lo que se vio es alemán
+
+Banco de pruebas alemán, IBAN alemanes (`DE77...`), códigos de tipo ZKA, categorías en alemán y autenticación por chipTAN `[V]`. Concuerda con lo del catálogo: **`location=ES` devuelve 32 bancos y ninguno es un banco minorista español** — no aparecen BBVA, Santander España, CaixaBank, Sabadell, Bankinter, ING España ni Openbank España `[V]`. Lo único con marca española es `tarjetayou.es`, una tarjeta luxemburguesa (Advanzia). Hay banco de pruebas checo; español no hay `[V]`.
+
+El sandbox es un sandbox y el catálogo de producción puede diferir. Pero **3.933 de 5.169 bancos son alemanes** `[V]`, y eso sí describe dónde vive su cobertura.
+
+### 11.3 El importe llega como número decimal de JSON
+
+En el cuerpo crudo: `"amount":-135.89` `[V]`. Un `JSON.parse` lo convierte en coma flotante **antes de que lo veamos**, que es exactamente lo que el núcleo existe para evitar.
+
+**La integración tiene que leer el texto de la respuesta y pasar la cadena decimal por `fromDecimalString`**, sin `JSON.parse` de por medio para los importes. Son veinte líneas, pero van en la frontera HTTP: hecho después ya es tarde.
+
+### 11.4 La categorización viene incluida, y resuelve la mitad que no nos importa
+
+De 500 movimientos, **478 llegaron categorizados** con jerarquía propia `[V]`. Eso reabre la pregunta de Tapix: para los países donde finAPI funciona, **el enriquecimiento no hay que comprarlo aparte**.
+
+Pero la taxonomía es suya y es alemana —`Mobilität`, `KFZ-Versicherung`, `Tanken`, `Lebensmittel & Getränke`— `[V]`. Resuelve descriptor→comercio; **no resuelve comercio→tu estructura**, que es dónde está el producto: ningún proveedor sabe que esa factura de luz es de Casa Madrid, pagada por la sociedad y repartida 60/40.
+
+### 11.5 El sandbox no lleva licencia
+
+Pasar un `redirectUrl` devuelve `INVALID_REDIRECT_URL: mandator's license is UNLICENSED` `[V]`. Es la línea de **Licencia AIS, €200/mes**, del tarifario: sin ella no se puede probar el flujo de redirección real. El sandbox sirve para ver la forma del dato, no para medir la experiencia que tendría un cliente.
+
+### 11.6 Qué cambia y qué no
+
+**No cambia la decisión**: seguimos con extractos. La prueba confirmó la fontanería y **desmintió la cobertura**, que era la duda que importaba.
+
+**Sí cambia la pregunta del correo.** Ya no es "¿cuánto cuesta España?" sino: *vuestro tarifario vende España como país adicional a €20/mes, y vuestro catálogo de sandbox no tiene ni un banco minorista español. ¿Qué entidades españolas son alcanzables en producción, por qué interfaz, y con qué cobertura de tarjetas de crédito?* Con esa respuesta se decide; sin ella, no.
