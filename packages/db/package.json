@@ -17,7 +17,7 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -b",
-    "migrate": "node src/migrate.ts"
+    "migrate": "tsc -b && node --env-file-if-exists=../../.env dist/migrate.js"
   },
   "dependencies": {
     "@moneypilot/core": "workspace:*",

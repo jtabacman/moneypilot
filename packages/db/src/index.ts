@@ -17,6 +17,68 @@ export {
 export type { ClientConfig, TlsOptions } from './connection.js'
 export { ConnectionStringError, SUPABASE_ROOT_CA_2021, toClientConfig } from './connection.js'
 
+// ── Repositorio ─────────────────────────────────────────────────────────────
+// Toda función recibe un TenantClient que ya viene con el hogar fijado. No hay
+// forma de llamarlas sin declarar de quién son los datos que se piden.
+
+export type {
+  DeclaredBalanceInput,
+  ImportBatchRow,
+  ImportBatchStatus,
+  NeedsReviewTransaction,
+  PersistableTransaction,
+  PersistImportInput,
+  PersistImportResult,
+} from './repo/import.js'
+export { listImportBatches, persistImport, revertImport } from './repo/import.js'
+export type {
+  DimensionSummary,
+  DimensionValueSummary,
+  NetWorthAttribution,
+  NetWorthPoint,
+  RecurringRow,
+  RecurringState,
+  ReviewRow,
+  ReviewState,
+  SpendByCategoryMonthRow,
+  SpendByDimensionRow,
+  TopMerchantRow,
+} from './repo/read-analysis.js'
+export {
+  dimensionsWithValues,
+  netWorthAttribution,
+  netWorthSeries,
+  recurring,
+  reviewQueue,
+  spendByCategoryMonth,
+  spendByDimension,
+  topMerchants,
+} from './repo/read-analysis.js'
+export type {
+  AccountBalance,
+  AccountKind,
+  CategoryNode,
+  DataSource,
+  LiquidityLane,
+  MovementFilter,
+  MovementPage,
+  MovementRow,
+  PeriodTotals,
+  ReconciliationRow,
+  ReconciliationStatus,
+  Ymd,
+} from './repo/read-ledger.js'
+export {
+  accountBalances,
+  categoryTree,
+  liquidityByCurrency,
+  movements,
+  reconciliation,
+  totals,
+} from './repo/read-ledger.js'
+export type { SeedOptions, SeedResult } from './repo/seed.js'
+export { hasDemoData, removeDemoData, seedDemoHousehold } from './repo/seed.js'
+
 /*
  * El corredor de migraciones NO se reexporta acá a propósito.
  *

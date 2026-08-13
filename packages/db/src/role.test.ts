@@ -24,6 +24,23 @@ const enabled = ADMIN_URL !== undefined
 
 const suite = enabled ? describe : describe.skip
 
+/**
+ * Nombres de hogar y de usuario derivados del pid.
+ *
+ * Los tests borran por nombre y por user_id antes de crear, así que con
+ * valores fijos dos corridas simultáneas contra la misma base se pisan: una
+ * borra el hogar que la otra acaba de crear, y el fallo aparece como un error
+ * de clave foránea que no tiene nada que ver con lo que se está probando.
+ *
+ * `provision_household` es idempotente **por user_id**, así que el usuario
+ * también tiene que ser único por corrida o el segundo test recibiría el hogar
+ * del primero.
+ */
+const P = `#${process.pid}`
+const cola = String(process.pid).padStart(12, '0').slice(-12)
+const USUARIO_ALTA = `11111111-1111-4111-8111-${cola}`
+const USUARIO_DOBLE = `22222222-2222-4222-8222-${cola}`
+
 suite('cambio de rol dentro de la transacción', () => {
   let admin: Db
   let casaA: string
@@ -34,12 +51,14 @@ suite('cambio de rol dentro de la transacción', () => {
     admin = createPool({ connectionString: ADMIN_URL as string })
 
     await withoutTenantScope(admin, async (client) => {
-      await client.query("delete from tenant where name in ('Rol A', 'Rol B')")
+      await client.query('delete from tenant where name in ($1, $2)', [`Rol A ${P}`, `Rol B ${P}`])
       const a = await client.query<{ id: string }>(
-        "insert into tenant (name, base_currency) values ('Rol A', 'EUR') returning id",
+        "insert into tenant (name, base_currency) values ($1, 'EUR') returning id",
+        [`Rol A ${P}`],
       )
       const b = await client.query<{ id: string }>(
-        "insert into tenant (name, base_currency) values ('Rol B', 'USD') returning id",
+        "insert into tenant (name, base_currency) values ($1, 'USD') returning id",
+        [`Rol B ${P}`],
       )
       casaA = a.rows[0]?.id as string
       casaB = b.rows[0]?.id as string
@@ -131,13 +150,13 @@ suite('alta de hogar', () => {
   })
 
   it('crea tenant, membresía y cuenta de apertura en una sola operación', async () => {
-    const userId = '11111111-1111-4111-8111-111111111111'
+    const userId = USUARIO_ALTA
     const tenantId = await withoutTenantScope(admin, async (client) => {
       await client.query('delete from membership where user_id = $1', [userId])
-      await client.query("delete from tenant where name = 'Hogar de prueba'")
+      await client.query('delete from tenant where name = $1', [`Hogar de prueba ${P}`])
       const { rows } = await client.query<{ provision_household: string }>(
         'select provision_household($1, $2, $3, $4)',
-        [userId, 'test@example.com', 'Hogar de prueba', 'EUR'],
+        [userId, 'test@example.com', `Hogar de prueba ${P}`, 'EUR'],
       )
       return rows[0]?.provision_household as string
     })
@@ -158,19 +177,19 @@ suite('alta de hogar', () => {
   })
 
   it('es idempotente: un doble click no crea dos hogares', async () => {
-    const userId = '22222222-2222-4222-8222-222222222222'
+    const userId = USUARIO_DOBLE
     const call = async (): Promise<string> =>
       withoutTenantScope(admin, async (client) => {
         const { rows } = await client.query<{ provision_household: string }>(
           'select provision_household($1, $2, $3, $4)',
-          [userId, 'dup@example.com', 'Hogar duplicado', 'EUR'],
+          [userId, 'dup@example.com', `Hogar duplicado ${P}`, 'EUR'],
         )
         return rows[0]?.provision_household as string
       })
 
     await withoutTenantScope(admin, async (client) => {
       await client.query('delete from membership where user_id = $1', [userId])
-      await client.query("delete from tenant where name = 'Hogar duplicado'")
+      await client.query('delete from tenant where name = $1', [`Hogar duplicado ${P}`])
     })
 
     expect(await call()).toBe(await call())

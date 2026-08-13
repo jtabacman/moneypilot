@@ -27,6 +27,17 @@ const enabled = ADMIN_URL !== undefined && APP_URL !== undefined
 
 const suite = enabled ? describe : describe.skip
 
+/**
+ * Los nombres de hogar llevan el pid a propósito.
+ *
+ * El `beforeAll` borra por nombre antes de crear, así que con nombres fijos
+ * dos corridas simultáneas contra la misma base se borran los hogares la una a
+ * la otra a mitad de camino. Los fallos que salen de ahí parecen del código y
+ * son del entorno, que es la peor clase de fallo intermitente.
+ */
+const NOMBRE_A = `Casa A #${process.pid}`
+const NOMBRE_B = `Casa B #${process.pid}`
+
 suite('aislamiento entre hogares', () => {
   let admin: Db
   let app: Db
@@ -42,12 +53,14 @@ suite('aislamiento entre hogares', () => {
     // El alta del primer hogar es una de las pocas operaciones legítimamente
     // fuera de alcance: todavía no hay tenant al que pertenecer.
     await withoutTenantScope(admin, async (client) => {
-      await client.query("delete from tenant where name in ('Casa A', 'Casa B')")
+      await client.query('delete from tenant where name in ($1, $2)', [NOMBRE_A, NOMBRE_B])
       const a = await client.query<{ id: string }>(
-        "insert into tenant (name, base_currency) values ('Casa A', 'EUR') returning id",
+        "insert into tenant (name, base_currency) values ($1, 'EUR') returning id",
+        [NOMBRE_A],
       )
       const b = await client.query<{ id: string }>(
-        "insert into tenant (name, base_currency) values ('Casa B', 'USD') returning id",
+        "insert into tenant (name, base_currency) values ($1, 'USD') returning id",
+        [NOMBRE_B],
       )
       casaA = a.rows[0]?.id as string
       casaB = b.rows[0]?.id as string
