@@ -92,6 +92,12 @@ export const NAV: readonly NavGroup[] = [
         label: 'Revisar',
         blurb: 'Lo que el motor no se anima a decidir solo.',
       },
+      {
+        href: '/reglas',
+        label: 'Reglas',
+        blurb: 'Clasificá una vez y que se aplique a todo lo que venga.',
+        roles: ['titular', 'pareja'],
+      },
     ],
   },
   {

@@ -226,6 +226,70 @@ export async function persistImport(
   }
 }
 
+export interface BookTransactionInput {
+  /** La cuenta del extracto. La pata bancaria va contra ésta. */
+  readonly accountId: string
+  /**
+   * El lote del que salió el movimiento, o null si no vino de una importación.
+   * Se conserva a propósito: el asiento nace del mismo lote que trajo la fila,
+   * así que deshacer aquella importación se lo sigue llevando.
+   */
+  readonly batchId: string | null
+  readonly transaction: PersistableTransaction
+  readonly source?: 'file' | 'pdf'
+  /** Contrapartida explícita. Sin ella se usan las bolsas de sin categorizar. */
+  readonly suspenseAccountId?: string
+}
+
+/**
+ * Asienta UN movimiento suelto y devuelve el id de su asiento.
+ *
+ * Existe por la decisión 2 de la cabecera: lo que va a revisión no entra al
+ * libro, y se queda entero en la evidencia de su `review_item`. Cuando una
+ * persona decide que aquella fila no era un duplicado, hay que meterla — y
+ * meterla tiene que ser **exactamente** lo mismo que hace una importación.
+ *
+ * De ahí que esto sea una fachada de tres líneas sobre las piezas que ya usa
+ * `persistImport` y no una segunda implementación: escribir el par de postings
+ * en la capa que llama sería duplicar el balanceo, y de dos copias la que se
+ * quede sin actualizar va a escribir asientos que no cuadran. Acá la
+ * contrapartida se sigue calculando por negación del importe, que es lo que
+ * garantiza el cero.
+ */
+export async function bookTransaction(
+  client: TenantClient,
+  input: BookTransactionInput,
+): Promise<string> {
+  const tenantId = await currentTenant(client)
+  const account = await loadAccount(client, input.accountId)
+  // La misma comprobación que en una importación, y por el mismo motivo: si la
+  // moneda del movimiento no es la de la cuenta, el asiento no puede balancear.
+  checkTransaction(input.transaction, account.currency, 'transaction')
+
+  const suspense = await resolveSuspenseAccounts(
+    client,
+    tenantId,
+    account.currency,
+    input.suspenseAccountId,
+    [input.transaction],
+  )
+
+  const [entryId] = await insertEntriesAndPostings(client, {
+    tenantId,
+    batchId: input.batchId,
+    accountId: input.accountId,
+    suspense,
+    source: input.source ?? 'file',
+    transactions: [input.transaction],
+  })
+  if (entryId === undefined) {
+    throw new ImportPersistError(
+      `El asiento de ${describe(input.transaction)} no llegó a crearse: es un error de programación de este módulo.`,
+    )
+  }
+  return entryId
+}
+
 export interface RevertImportResult {
   readonly removedEntries: number
   /**
@@ -598,14 +662,19 @@ async function resolveSuspense(
 
 interface EntryBatch {
   readonly tenantId: string
-  readonly batchId: string
+  /** Null cuando el asiento no pertenece a ninguna importación. */
+  readonly batchId: string | null
   readonly accountId: string
   readonly suspense: SuspenseAccounts
   readonly source: 'file' | 'pdf'
   readonly transactions: readonly PersistableTransaction[]
 }
 
-async function insertEntriesAndPostings(client: TenantClient, batch: EntryBatch): Promise<void> {
+/** Devuelve los ids creados, en el orden en que llegaron las transacciones. */
+async function insertEntriesAndPostings(
+  client: TenantClient,
+  batch: EntryBatch,
+): Promise<string[]> {
   const rows = batch.transactions.map((transaction) => ({ id: newEntryId(), transaction }))
 
   for (let offset = 0; offset < rows.length; offset += CHUNK) {
@@ -677,6 +746,8 @@ async function insertEntriesAndPostings(client: TenantClient, batch: EntryBatch)
       [batch.tenantId, entryIds, accountIds, ordinals, amounts, currencies, memos],
     )
   }
+
+  return rows.map((row) => row.id)
 }
 
 async function insertReviewItems(

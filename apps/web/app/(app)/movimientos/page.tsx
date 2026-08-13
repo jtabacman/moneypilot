@@ -29,6 +29,16 @@ import { formatDate } from '@/lib/format'
 import { navItem } from '@/lib/nav'
 import { NoData } from '../empty-state'
 import { Coverage, Empty, Money, PageBar } from '../ui'
+import { clasificar } from './actions'
+import {
+  aCadena,
+  esSinCategorizar,
+  leerResultado,
+  MENSAJE_AVISO,
+  puedeClasificar,
+  type Resultado,
+  valorOpcion,
+} from './clasificacion'
 import {
   aFiltroDb,
   con,
@@ -57,9 +67,11 @@ export default async function MovimientosPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const { filtros: f, recortados } = parseEntrada(await searchParams)
+  const entrada = await searchParams
+  const { filtros: f, recortados } = parseEntrada(entrada)
   const filtro = aFiltroDb(f)
   const offset = (f.pagina - 1) * PAGE_SIZE
+  const parte = leerResultado(entrada)
 
   const { session, data } = await readHousehold(async (client, sesion) => {
     const [pagina, cuentas, categorias, dimensiones, conTraspasos] = await Promise.all([
@@ -72,6 +84,16 @@ export default async function MovimientosPage({
       f.traspasos ? null : movements(client, { ...filtro, includeTransfers: true, limit: 1 }),
     ])
 
+    // Las bolsas del importador, y cuánto queda dentro de ellas CON los filtros
+    // puestos. Se cuenta con el mismo filtro que lleva el enlace del aviso
+    // porque si no, el número y la lista a la que se llega serían dos cosas
+    // distintas — y el aviso estaría mintiendo sobre su propio enlace.
+    const bolsas = categorias.filter((c) => esSinCategorizar(c.name)).map((c) => c.id)
+    const sinCategorizar =
+      bolsas.length === 0
+        ? 0
+        : (await movements(client, { ...filtro, categoryIds: bolsas, limit: 1 })).total
+
     // Si el filtro entero cupo en la primera página, ya está leído: sumar no
     // tiene por qué costar una segunda ida a la base.
     const completa = f.pagina === 1 && pagina.total <= PAGE_SIZE
@@ -83,10 +105,20 @@ export default async function MovimientosPage({
       completa ? pagina.rows : null,
     )
 
-    return { pagina, cuentas, categorias, dimensiones, conTraspasos, resumen }
+    return {
+      pagina,
+      cuentas,
+      categorias,
+      dimensiones,
+      conTraspasos,
+      resumen,
+      bolsas,
+      sinCategorizar,
+    }
   })
 
   const { pagina, cuentas, categorias, dimensiones, conTraspasos, resumen } = data
+  const { bolsas, sinCategorizar } = data
   const moneda = session.baseCurrency
   const nav = navItem('/movimientos')
   const cabecera =
@@ -112,6 +144,16 @@ export default async function MovimientosPage({
   const ultima = Math.max(1, Math.ceil(pagina.total / PAGE_SIZE))
   const mesActual = currentMonthPeriod(today())
 
+  const enBolsa = new Set(bolsas)
+  // Un asiento sin pata de gasto ni de ingreso no tiene categoría que cambiar,
+  // así que no se ofrece marcarlo. Las dos patas de un traspaso salen dos veces
+  // en la lista con el mismo asiento detrás, y por eso el `Set`: mandarlo dos
+  // veces contaría el mismo movimiento dos veces en el parte.
+  const clasificables = [
+    ...new Set(pagina.rows.filter((row) => row.categoryId !== null).map((row) => row.entryId)),
+  ]
+  const volver = aCadena(f)
+
   return (
     <>
       <PageBar
@@ -126,6 +168,10 @@ export default async function MovimientosPage({
       />
 
       <div className="page">
+        {parte !== null && <Parte r={parte} categorias={categorias} dimensiones={dimensiones} />}
+
+        <SinCategorizar cuantos={sinCategorizar} bolsas={bolsas} f={f} />
+
         {/* Un enlace que traía más ids de los que caben en una URL razonable se
             recorta, pero no en silencio: quien llegó desde un total vería el
             detalle de una parte con cara de estar entero. */}
@@ -288,27 +334,57 @@ export default async function MovimientosPage({
                 : `El filtro tiene ${pagina.total} movimientos y estás pidiendo una página que ya no existe.`}
             </Empty>
           ) : (
-            <div className="scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th scope="col">Fecha</th>
-                    <th scope="col">Descripción</th>
-                    <th scope="col">Cuenta</th>
-                    <th scope="col">Categoría</th>
-                    <th scope="col">Dimensiones</th>
-                    <th scope="col" className="r">
-                      Importe
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pagina.rows.map((row) => (
-                    <Fila key={row.postingId} row={row} f={f} moneda={moneda} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            /*
+             * Un `form` de toda la vida con casillas y un botón al pie: no hace
+             * falta ni una línea de JavaScript para marcar cuarenta movimientos
+             * y mandarlos a una categoría, igual que el resto de la pantalla.
+             * Lo que se envía es la lista de asientos marcados; el importe, la
+             * fecha y la cuenta no viajan porque no se tocan nunca.
+             */
+            <form action={clasificar}>
+              {/* De dónde vino, para volver al mismo sitio después de escribir.
+                  La acción no confía en esto: lo vuelve a pasar por el parseador
+                  de filtros, así que de acá no sale un destino inventado. */}
+              <input type="hidden" name="volver" value={volver} />
+
+              <div className="scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col" className={styles.marcar}>
+                        <span className={styles.oculto}>Marcar</span>
+                      </th>
+                      <th scope="col">Fecha</th>
+                      <th scope="col">Descripción</th>
+                      <th scope="col">Cuenta</th>
+                      <th scope="col">Categoría</th>
+                      <th scope="col">Dimensiones</th>
+                      <th scope="col" className="r">
+                        Importe
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pagina.rows.map((row) => (
+                      <Fila
+                        key={row.postingId}
+                        row={row}
+                        f={f}
+                        moneda={moneda}
+                        sinCategorizar={row.categoryId !== null && enBolsa.has(row.categoryId)}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <BarraClasificar
+                categorias={categorias}
+                dimensiones={dimensiones}
+                clasificables={clasificables}
+                rol={session.role}
+              />
+            </form>
           )}
 
           {/* Sin resultados no hay nada que paginar: dos botones apagados sólo
@@ -371,6 +447,12 @@ export default async function MovimientosPage({
                 Cualquier cuenta, categoría o dimensión de la tabla es un enlace: al tocarla se
                 añade al filtro y la URL queda lista para pegarla en un correo.
               </li>
+              <li>
+                Para clasificar, marcá las casillas de la izquierda y elegí abajo a dónde van. Las
+                filas sin casilla no tienen categoría que cambiar —una pata de traspaso, un saldo de
+                apertura— y las que reparten entre varias categorías se dejan como están: al aplicar
+                se cuentan aparte, con el motivo.
+              </li>
             </ul>
           </div>
         </div>
@@ -381,11 +463,47 @@ export default async function MovimientosPage({
 
 /* ── Fila ────────────────────────────────────────────────────────────────── */
 
-function Fila({ row, f, moneda }: { row: MovementRow; f: Filtros; moneda: string }) {
+function Fila({
+  row,
+  f,
+  moneda,
+  sinCategorizar,
+}: {
+  row: MovementRow
+  f: Filtros
+  moneda: string
+  /** Su contrapartida es una de las bolsas del importador. */
+  sinCategorizar: boolean
+}) {
   const enBase = enMoneda(row, moneda)
 
   return (
     <tr className={row.isTransfer ? styles.traspaso : undefined}>
+      <td className={styles.marcar}>
+        {row.categoryId === null ? (
+          // No se ofrece marcar lo que no se puede clasificar, pero se dice por
+          // qué: una casilla que se puede marcar y nunca hace nada es peor que
+          // no tenerla.
+          <span
+            className="faint"
+            title={
+              row.isTransfer
+                ? 'Las dos patas de un traspaso van contra cuentas tuyas: no hay categoría que cambiar'
+                : 'Este asiento no tiene pata de gasto ni de ingreso: es un saldo de apertura o un ajuste de cambio'
+            }
+          >
+            —
+          </span>
+        ) : (
+          <input
+            type="checkbox"
+            name="mov"
+            value={row.entryId}
+            aria-label={`Marcar ${row.description} del ${formatDate(row.bookedOn, 'long')}`}
+          />
+        )}
+      </td>
+
       <td>
         <time dateTime={row.bookedOn} title={formatDate(row.bookedOn, 'long')}>
           {formatDate(row.bookedOn)}
@@ -399,6 +517,29 @@ function Fila({ row, f, moneda }: { row: MovementRow; f: Filtros; moneda: string
           {row.needsReview && <span className="status warn">a revisar</span>}
         </div>
         {row.memo !== null && <div className="small faint">{row.memo}</div>}
+        {sinCategorizar && (
+          /*
+           * El atajo que hace que esto escale. Clasificar de a uno no termina
+           * nunca: veinte reglas suelen cubrir el ochenta por ciento de un alta.
+           *
+           * Viaja el descriptor **crudo** y no una versión normalizada, aunque
+           * traiga la referencia del banco. La regla se compara con ILIKE contra
+           * el texto tal como lo escribió el banco, así que un descriptor sin
+           * tildes ni puntuación puede no encontrar ni el movimiento del que
+           * salió. Se manda lo que sí coincide y la pantalla de la regla enseña
+           * a cuántos afecta mientras se recorta.
+           */
+          <Link
+            className={`small ${styles.regla}`}
+            href={{
+              pathname: '/reglas/nueva',
+              query: { texto: row.description.slice(0, 200) },
+            }}
+            title="Abre la regla nueva con este texto puesto, para clasificar de una vez todo lo que se le parezca"
+          >
+            crear regla con este texto
+          </Link>
+        )}
       </td>
 
       <td>
@@ -474,6 +615,290 @@ function Fila({ row, f, moneda }: { row: MovementRow; f: Filtros; moneda: string
           ))}
       </td>
     </tr>
+  )
+}
+
+/* ── Clasificar ──────────────────────────────────────────────────────────── */
+
+/** «12 movimientos», «1 movimiento». */
+function cuenta(n: number, singular: string, plural: string): string {
+  return `${n} ${n === 1 ? singular : plural}`
+}
+
+function etiquetaValor(dimensiones: readonly DimensionSummary[], valueId: string): string | null {
+  for (const dimension of dimensiones) {
+    const valor = dimension.values.find((v) => v.id === valueId)
+    if (valor !== undefined) return `${dimension.label}: ${valor.label}`
+  }
+  return null
+}
+
+/**
+ * El aviso de lo que falta por clasificar.
+ *
+ * Es la pregunta que vende el producto vista del revés: mientras un movimiento
+ * esté en la bolsa del importador no cuenta en el gasto por categoría ni en lo
+ * que cuesta cada propiedad, así que este número es exactamente el tamaño del
+ * agujero que tienen los tableros.
+ */
+function SinCategorizar({
+  cuantos,
+  bolsas,
+  f,
+}: {
+  cuantos: number
+  bolsas: readonly string[]
+  f: Filtros
+}) {
+  if (cuantos === 0 || bolsas.length === 0) return null
+
+  const yaFiltrado =
+    f.categorias.length === bolsas.length && bolsas.every((id) => f.categorias.includes(id))
+
+  return (
+    <div className="banner">
+      <b>
+        {cuenta(cuantos, 'movimiento sigue', 'movimientos siguen')} sin categorizar
+        {hayFiltros(f) && !yaFiltrado ? ' dentro de este filtro' : ''}.
+      </b>{' '}
+      Lo que el importador no supo clasificar cae en una bolsa, y desde ahí no suma ni en el gasto
+      por categoría ni en lo que cuesta cada propiedad.{' '}
+      {yaFiltrado ? (
+        'Son los de esta lista: marcalos abajo y mandalos a una categoría, o creá una regla con el enlace que lleva cada uno.'
+      ) : (
+        <>
+          <Link href={ruta(con(f, { categorias: [...bolsas] }))}>Ver sólo esos</Link>.
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * El parte de la última pasada, leído de la URL.
+ *
+ * Dice los tres números que hacen falta para saber qué pasó: cuántos cambiaron,
+ * cuántos ya estaban donde los mandabas y cuántos quedaron fuera **con el
+ * motivo**. Un "hecho" a secas después de marcar cuarenta movimientos obliga a
+ * ir a contarlos a mano, y el que no se enteró de que dos eran traspasos cree
+ * que la pantalla se comió su cambio.
+ */
+function Parte({
+  r,
+  categorias,
+  dimensiones,
+}: {
+  r: Resultado
+  categorias: readonly CategoryNode[]
+  dimensiones: readonly DimensionSummary[]
+}) {
+  if (r.aviso !== null) {
+    return (
+      <div className="error">
+        <b>No se cambió nada.</b> {MENSAJE_AVISO[r.aviso]}
+        {r.aviso === 'rol' && (
+          <>
+            {' '}
+            El contador y el asistente proponen y el titular aprueba; ese circuito de propuestas
+            todavía está en construcción, así que por ahora el cambio lo tiene que hacer quien sea
+            titular o pareja
+            {r.detalle === null ? '' : `, y tu rol acá es «${r.detalle}»`}.
+          </>
+        )}
+        {r.aviso === 'base' && r.detalle !== null && <> La base dijo: «{r.detalle}».</>}
+      </div>
+    )
+  }
+
+  const destino = r.categoryId === null ? null : categorias.find((c) => c.id === r.categoryId)
+  const donde = destino === undefined || destino === null ? 'esa categoría' : `«${destino.path}»`
+  const puestos = r.valores
+    .map((id) => etiquetaValor(dimensiones, id))
+    .filter((etiqueta): etiqueta is string => etiqueta !== null)
+  const quitadas = r.quitadas
+    .map((id) => dimensiones.find((d) => d.id === id)?.label)
+    .filter((etiqueta): etiqueta is string => etiqueta !== undefined)
+
+  const titular =
+    r.categoryId !== null
+      ? `De ${cuenta(r.pedidos, 'movimiento marcado', 'movimientos marcados')}, ${
+          r.cambiados === 0
+            ? 'ninguno cambió de categoría'
+            : `${cuenta(r.cambiados, 'cambió', 'cambiaron')} a ${donde}`
+        }.`
+      : `De ${cuenta(r.pedidos, 'movimiento marcado', 'movimientos marcados')}, ${
+          r.conDimensiones === 0
+            ? 'ninguno cambió de atribución'
+            : `${cuenta(r.conDimensiones, 'cambió', 'cambiaron')} de atribución`
+        }.`
+
+  const frases: string[] = []
+  if (r.yaEstaban > 0) {
+    frases.push(
+      `${cuenta(r.yaEstaban, 'ya estaba', 'ya estaban')} en ${donde} y no se ` +
+        `${r.yaEstaban === 1 ? 'tocó' : 'tocaron'}: por eso ${r.yaEstaban === 1 ? 'no figura' : 'no figuran'} ` +
+        'en el registro de cambios.',
+    )
+  }
+  // La atribución se cuenta aunque el valor no se pueda nombrar —lo pudieron
+  // archivar o borrar entre aplicar y volver—: perder el nombre no puede hacer
+  // desaparecer el número de movimientos que cambiaron.
+  if (r.conDimensiones > 0 && r.categoryId !== null) {
+    frases.push(
+      `La atribución se reescribió en ${cuenta(r.conDimensiones, 'movimiento', 'movimientos')}` +
+        `${puestos.length === 0 ? '' : `: ${puestos.join(', ')}, al 100%`}.`,
+    )
+  } else if (r.conDimensiones > 0 && puestos.length > 0) {
+    frases.push(`${puestos.length === 1 ? 'Quedó' : 'Quedaron'} en ${puestos.join(', ')}, al 100%.`)
+  }
+  if (quitadas.length > 0 && r.conDimensiones > 0) {
+    frases.push(`Se les quitó la atribución de ${quitadas.join(', ')}.`)
+  }
+  if (r.repartos > 0) {
+    frases.push(
+      `${cuenta(r.repartos, 'reparte', 'reparten')} entre varias categorías y ${
+        r.repartos === 1 ? 'quedó' : 'quedaron'
+      } como ${r.repartos === 1 ? 'estaba' : 'estaban'}: aplastar un ticket repartido a una sola ` +
+        'categoría destruiría el reparto sin avisar.',
+    )
+  }
+  if (r.sinContrapartida > 0) {
+    frases.push(
+      `${cuenta(r.sinContrapartida, 'no tiene', 'no tienen')} pata de gasto ni de ingreso —una ` +
+        'pata de traspaso interno, un saldo de apertura, un ajuste de cambio—, así que no hay ' +
+        'categoría que cambiar.',
+    )
+  }
+  if (r.inexistentes > 0) {
+    frases.push(`${cuenta(r.inexistentes, 'ya no existe', 'ya no existen')} en este hogar.`)
+  }
+
+  return (
+    <div className="notice">
+      <b>{titular}</b>
+      {frases.length > 0 && ` ${frases.join(' ')}`}
+    </div>
+  )
+}
+
+/**
+ * La barra que aplica lo marcado.
+ *
+ * Va siempre visible y no aparece con la selección: sin JavaScript no hay forma
+ * de saber cuántas casillas están marcadas mientras el usuario las marca, y una
+ * barra que se revelara con CSS quedaría invisible para siempre en un navegador
+ * sin `:has()`. Lo que sí hace `:has()` es destacarla cuando hay algo marcado —
+ * mejora si está, y si no está no rompe nada.
+ */
+function BarraClasificar({
+  categorias,
+  dimensiones,
+  clasificables,
+  rol,
+}: {
+  categorias: readonly CategoryNode[]
+  dimensiones: readonly DimensionSummary[]
+  clasificables: readonly string[]
+  rol: string
+}) {
+  const gastos = categorias.filter((c) => c.kind === 'expense')
+  const ingresos = categorias.filter((c) => c.kind === 'income')
+  // Un valor archivado no se ofrece para etiquetar —esa es toda la diferencia
+  // entre archivar y borrar— pero sí se puede quitar de lo que ya lo tenía.
+  const conValores = dimensiones.filter((d) => d.values.some((v) => v.archivedAt === null))
+  const puede = puedeClasificar(rol)
+
+  return (
+    <div className={`panel-foot ${styles.barra}`}>
+      <div className={styles.campos}>
+        <label className={styles.campo}>
+          <span className="label">Mandar a la categoría</span>
+          <select name="categoria" defaultValue="">
+            <option value="">— dejar la categoría como está —</option>
+            <optgroup label="Gasto">
+              {gastos.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.path}
+                  {c.detached ? ' (fuera del árbol)' : ''}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="Ingreso">
+              {ingresos.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.path}
+                  {c.detached ? ' (fuera del árbol)' : ''}
+                </option>
+              ))}
+            </optgroup>
+          </select>
+        </label>
+
+        {conValores.length > 0 && (
+          <label className={styles.campo}>
+            <span className="label">Atribuir a</span>
+            <select name="valor" multiple size={6}>
+              {conValores.map((d) => (
+                <optgroup key={d.id} label={d.label}>
+                  <option value={valorOpcion(d.id, null)}>— quitar {d.label} —</option>
+                  {d.values
+                    .filter((v) => v.archivedAt === null)
+                    .map((v) => (
+                      <option key={v.id} value={valorOpcion(d.id, v.id)}>
+                        {v.label}
+                      </option>
+                    ))}
+                </optgroup>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
+
+      <div className={styles.aplicar}>
+        {clasificables.length === 0 ? (
+          <span className="small faint">
+            En esta página no hay nada que clasificar: son patas de traspaso o asientos sin
+            contrapartida de gasto ni de ingreso.
+          </span>
+        ) : (
+          <label className="row">
+            <input type="checkbox" name="todos" value="1" />
+            <span className="small">
+              {clasificables.length === 1
+                ? 'Aplicar al único de esta página que se puede clasificar, sin marcarlo'
+                : `Aplicar a los ${clasificables.length} de esta página que se pueden clasificar, sin marcarlos uno a uno`}
+            </span>
+          </label>
+        )}
+        {/* Los ids van en el formulario y no se vuelven a consultar al aplicar:
+            lo que se clasifica tiene que ser exactamente lo que el usuario vio,
+            no lo que la consulta devuelva medio minuto después. */}
+        {clasificables.map((id) => (
+          <input key={id} type="hidden" name="mov_pagina" value={id} />
+        ))}
+        <button type="submit" className="primary">
+          Aplicar
+        </button>
+      </div>
+
+      <p className="small faint">
+        Sólo cambia la contrapartida del asiento: el importe, la fecha y la cuenta no se tocan
+        nunca, y cada cambio queda con tu nombre en el registro de clasificación. Elegir un valor
+        reemplaza la atribución de esa dimensión y deja las demás como estaban; entra al 100%,
+        porque un reparto 60/40 exige decir los pesos y eso todavía no se pide desde acá.
+      </p>
+
+      {!puede && (
+        <div className="notice">
+          <b>Tu rol («{rol}») propone cambios, no los escribe.</b> El titular y la pareja
+          clasifican; el contador y el asistente proponen y el titular aprueba. El circuito de
+          propuestas todavía está en construcción, así que este botón te va a contestar que no se
+          escribió nada. No lo escondemos: cuando exista, es el mismo botón el que va a crear la
+          propuesta.
+        </div>
+      )}
+    </div>
   )
 }
 

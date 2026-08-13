@@ -5,11 +5,14 @@ import { navItem } from '@/lib/nav'
 import { NoData } from '../empty-state'
 import { Empty, Money, PageBar } from '../ui'
 import { indiceDeCuentas } from './accounts'
+import { motivoSinPermiso, puedeResolver, rotulosDeDecision } from './decision'
+import { Decidir } from './forms'
 import {
   type Evidencia as DatosEvidencia,
   etiquetaTipo,
   explicacionTipo,
   leerEvidencia,
+  leerTransaccionEnEspera,
 } from './kinds'
 import { EnRegistro } from './links'
 
@@ -25,7 +28,7 @@ const ITEM = navItem('/revisar')
 const TOPE = 200
 
 export default async function RevisarPage() {
-  const { data } = await readHousehold(async (client) => {
+  const { session, data } = await readHousehold(async (client) => {
     const [cola, cuentas] = await Promise.all([
       reviewQueue(client, { limit: TOPE }),
       accountBalances(client),
@@ -40,6 +43,11 @@ export default async function RevisarPage() {
 
   const pendientes = data.cola.filter((fila) => fila.state === 'pendiente')
   const resueltas = data.cola.filter((fila) => fila.state !== 'pendiente')
+
+  // Por qué se comprueba acá y no se esconde el botón: B6. El motivo viaja
+  // hasta el botón para que se lea antes de intentarlo, y la acción de servidor
+  // lo vuelve a comprobar por su cuenta — es un endpoint público.
+  const motivo = puedeResolver(session.role) ? null : motivoSinPermiso(session.role)
 
   return (
     <>
@@ -56,7 +64,7 @@ export default async function RevisarPage() {
       />
 
       <div className="page">
-        {movimientos === 0 ? (
+        {movimientos === 0 && data.cola.length === 0 ? (
           <NoData what="la cola de lo que necesita tu criterio" />
         ) : (
           <>
@@ -68,6 +76,7 @@ export default async function RevisarPage() {
               filas={pendientes}
               cuentas={indice}
               accionable
+              motivo={motivo}
               vacio="Todo lo que entró se pudo clasificar sin dudar. Cuando el motor no esté seguro, lo va a dejar acá."
             />
 
@@ -78,6 +87,7 @@ export default async function RevisarPage() {
                 filas={resueltas}
                 cuentas={indice}
                 accionable={false}
+                motivo={motivo}
                 vacio=""
               />
             )}
@@ -133,6 +143,7 @@ function Cola({
   filas,
   cuentas,
   accionable,
+  motivo,
   vacio,
 }: {
   titulo: string
@@ -140,6 +151,8 @@ function Cola({
   filas: readonly ReviewRow[]
   cuentas: ReadonlyMap<string, string>
   accionable: boolean
+  /** Por qué este rol no puede resolver, o null si sí puede. */
+  motivo: string | null
   vacio: string
 }) {
   return (
@@ -173,7 +186,13 @@ function Cola({
               </thead>
               <tbody>
                 {filas.map((fila) => (
-                  <Fila key={fila.id} fila={fila} cuentas={cuentas} accionable={accionable} />
+                  <Fila
+                    key={fila.id}
+                    fila={fila}
+                    cuentas={cuentas}
+                    accionable={accionable}
+                    motivo={motivo}
+                  />
                 ))}
               </tbody>
             </table>
@@ -183,9 +202,11 @@ function Cola({
 
       {accionable && filas.length > 0 && (
         <div className="panel-foot">
-          Aceptar y rechazar todavía no están conectados: falta el endpoint que escribe la decisión.
-          Los botones se dejan a la vista y deshabilitados en vez de esconderlos, porque esconder la
-          acción haría creer que la cola es sólo informativa.
+          Las dos decisiones se escriben con tu nombre y la hora. En las filas cuyo movimiento
+          todavía <b>no está en el libro</b> —los duplicados probables, que la importación dejó
+          fuera a propósito— aceptar además lo asienta: crea el asiento con sus dos patas a partir
+          de la transacción guardada en la evidencia. Rechazar no borra nada de lo que ya está
+          dentro; la fila se queda a la vista, resuelta y con su evidencia.
         </div>
       )}
     </section>
@@ -196,13 +217,28 @@ function Fila({
   fila,
   cuentas,
   accionable,
+  motivo,
 }: {
   fila: ReviewRow
   cuentas: ReadonlyMap<string, string>
   accionable: boolean
+  motivo: string | null
 }) {
   const evidencia = leerEvidencia(fila.evidence)
   const explicacion = explicacionTipo(fila.kind)
+
+  // La fila que espera fuera del libro no tiene asiento, así que `reviewQueue`
+  // no le puede dar ni fecha, ni importe, ni descripción: los tres están dentro
+  // de la evidencia. Sin leerlos de ahí, esta pantalla le estaría pidiendo a
+  // alguien que decida sobre una fila en blanco.
+  const espera = leerTransaccionEnEspera(fila.evidence, fila.entryId)
+  const enEspera = espera.tipo === 'lista' ? espera.transaccion : null
+  const fueraDelLibro = espera.tipo === 'lista' || espera.tipo === 'rota'
+
+  const descripcion = fila.description ?? enEspera?.description ?? 'Sin descripción'
+  const fecha = fila.bookedOn ?? enEspera?.bookedOn ?? null
+  const importe = fila.amount ?? enEspera?.amount ?? null
+  const moneda = fila.currency ?? enEspera?.currency ?? null
 
   return (
     <tr>
@@ -216,19 +252,30 @@ function Fila({
       </td>
 
       <td>
-        <b>{fila.description ?? 'Sin descripción'}</b>
+        <b>{descripcion}</b>
         <div className="small faint">
-          {fila.bookedOn === null ? 'sin fecha' : formatDate(fila.bookedOn, 'long')}
+          {fecha === null ? 'sin fecha' : formatDate(fecha, 'long')}
         </div>
+        {fueraDelLibro && (
+          <div className="small faint" style={{ maxWidth: '30ch' }}>
+            Todavía fuera del libro: no cuenta en ningún saldo hasta que decidas.
+          </div>
+        )}
+        {espera.tipo === 'rota' && (
+          <div className="small neg" style={{ maxWidth: '30ch' }}>
+            La transacción guardada no se puede leer ({espera.motivo}), así que no se va a poder
+            asentar.
+          </div>
+        )}
       </td>
 
       <td>{fila.accountName ?? <span className="faint">—</span>}</td>
 
       <td className="r">
-        {fila.amount === null || fila.currency === null ? (
+        {importe === null || moneda === null ? (
           <span className="faint">—</span>
         ) : (
-          <Money amount={fila.amount} currency={fila.currency} tone="flow" />
+          <Money amount={importe} currency={moneda} tone="flow" />
         )}
       </td>
 
@@ -240,22 +287,11 @@ function Fila({
         <div className="stack" style={{ gap: 'var(--s1)', alignItems: 'flex-end' }}>
           <EnRegistro cuentas={cuentas} accountName={fila.accountName} bookedOn={fila.bookedOn} />
           {accionable ? (
-            <div className="row" style={{ gap: 'var(--s1)', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                disabled
-                title="Todavía no hay endpoint para escribir la decisión."
-              >
-                Aceptar
-              </button>
-              <button
-                type="button"
-                disabled
-                title="Todavía no hay endpoint para escribir la decisión."
-              >
-                Rechazar
-              </button>
-            </div>
+            <Decidir
+              id={fila.id}
+              rotulos={rotulosDeDecision(fila.kind, fueraDelLibro)}
+              motivo={motivo}
+            />
           ) : (
             <span className={fila.state === 'aceptado' ? 'status ok' : 'status none'}>
               {fila.state}

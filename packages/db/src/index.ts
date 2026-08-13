@@ -22,6 +22,44 @@ export { ConnectionStringError, SUPABASE_ROOT_CA_2021, toClientConfig } from './
 // forma de llamarlas sin declarar de quién son los datos que se piden.
 
 export type {
+  ApplyAllOptions,
+  ApplyAllResult,
+  ApplyRuleOptions,
+  ApplyRuleResult,
+  ClassifyResult,
+  DimensionAssignment,
+  MatchKind,
+  OmitReason,
+  OmittedMovement,
+  PreviewOptions,
+  ReclassifyInput,
+  RuleDimensionInput,
+  RuleDimensionRow,
+  RuleInput,
+  RuleMatch,
+  RulePatch,
+  RulePreview,
+  RuleRow,
+  SetDimensionsInput,
+  SetDimensionsResult,
+  UncategorizedMerchant,
+  UncategorizedResult,
+} from './repo/classify.js'
+export {
+  applyAllRules,
+  applyRule,
+  ClassifyError,
+  createRule,
+  deleteRule,
+  listRules,
+  previewRule,
+  reclassify,
+  setDimensions,
+  uncategorized,
+  updateRule,
+} from './repo/classify.js'
+export type {
+  BookTransactionInput,
   DeclaredBalanceInput,
   ImportBatchRow,
   ImportBatchStatus,
@@ -30,7 +68,7 @@ export type {
   PersistImportInput,
   PersistImportResult,
 } from './repo/import.js'
-export { listImportBatches, persistImport, revertImport } from './repo/import.js'
+export { bookTransaction, listImportBatches, persistImport, revertImport } from './repo/import.js'
 export type {
   DimensionSummary,
   DimensionValueSummary,

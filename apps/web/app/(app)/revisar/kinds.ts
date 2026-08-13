@@ -3,8 +3,13 @@
  *
  * Vive en un módulo aparte porque /hoy también cuenta la cola por tipo, y dos
  * copias del mismo diccionario se desincronizan el día que el motor aprende un
- * tipo nuevo.
+ * tipo nuevo. Por lo mismo, la lectura de la transacción que espera dentro de
+ * la evidencia está acá y no en la acción que la asienta: la pantalla necesita
+ * enseñarla y la acción necesita escribirla, y las dos tienen que estar
+ * mirando exactamente los mismos campos.
  */
+
+import type { PersistableTransaction } from '@moneypilot/db'
 
 /** Los tres que emite el esquema hoy (`review_kind`). */
 const ETIQUETA: Readonly<Record<string, string>> = {
@@ -109,4 +114,96 @@ function aTexto(valor: unknown): string {
   if (typeof valor === 'number' || typeof valor === 'boolean') return String(valor)
   if (valor === null || valor === undefined) return '—'
   return JSON.stringify(valor)
+}
+
+/* ── La transacción que espera fuera del libro ───────────────────────────── */
+
+const FECHA_FORMA = /^\d{4}-\d{2}-\d{2}$/
+const ENTERO_FORMA = /^-?\d+$/
+const HUELLA_FORMA = /^[0-9a-f]{64}$/i
+const MONEDA_FORMA = /^[A-Za-z]{3}$/
+
+export type TransaccionEnEspera =
+  /** La fila apunta a un asiento: el movimiento ya está en el libro. */
+  | { readonly tipo: 'ya-asentada' }
+  /** Ni asiento ni transacción guardada: la fila es un aviso y nada más. */
+  | { readonly tipo: 'sin-transaccion' }
+  /** Hay algo guardado pero no se puede leer. El motivo se enseña, no se traga. */
+  | { readonly tipo: 'rota'; readonly motivo: string }
+  | { readonly tipo: 'lista'; readonly transaccion: PersistableTransaction }
+
+/**
+ * Reconstruye la transacción que `persistImport` dejó guardada en la evidencia.
+ *
+ * Existe porque lo que va a revisión NO entra al libro: la fila no tiene
+ * asiento y por eso `reviewQueue` no le puede poner ni fecha, ni importe, ni
+ * descripción. Todo eso está acá dentro, y sin leerlo la pantalla le pediría a
+ * alguien que decida sobre una fila en blanco.
+ *
+ * Nada se da por bueno. Lo escrito ahí es JSON —texto y números de
+ * JavaScript—, así que el importe viene como cadena decimal (a propósito: un
+ * importe como número JSON es el error de coma flotante reintroducido en la
+ * frontera) y se convierte con `BigInt`, nunca con `Number`. La comprobación
+ * con la expresión regular va ANTES de convertir, porque `BigInt('')` es `0n`
+ * y un importe vacío se colaría como un movimiento de cero euros.
+ */
+export function leerTransaccionEnEspera(
+  evidence: Record<string, unknown>,
+  entryId: string | null,
+): TransaccionEnEspera {
+  if (entryId !== null) return { tipo: 'ya-asentada' }
+
+  const bruto = evidence['transaccion']
+  if (typeof bruto !== 'object' || bruto === null || Array.isArray(bruto)) {
+    return { tipo: 'sin-transaccion' }
+  }
+  const guardada = bruto as Record<string, unknown>
+
+  const bookedOn = cadena(guardada, 'bookedOn')
+  if (bookedOn === null || !FECHA_FORMA.test(bookedOn)) {
+    return { tipo: 'rota', motivo: 'la fecha contable no es una fecha YYYY-MM-DD' }
+  }
+  const valuedOn = cadena(guardada, 'valuedOn')
+  if (valuedOn !== null && !FECHA_FORMA.test(valuedOn)) {
+    return { tipo: 'rota', motivo: 'la fecha de valor no es una fecha YYYY-MM-DD' }
+  }
+  const amountMinor = cadena(guardada, 'amountMinor')
+  if (amountMinor === null || !ENTERO_FORMA.test(amountMinor)) {
+    return { tipo: 'rota', motivo: 'el importe no es un entero en unidades mínimas' }
+  }
+  const currency = cadena(guardada, 'currency')
+  if (currency === null || !MONEDA_FORMA.test(currency)) {
+    return { tipo: 'rota', motivo: 'la moneda no es un código de tres letras' }
+  }
+  const fingerprint = cadena(guardada, 'fingerprint')
+  if (fingerprint === null || !HUELLA_FORMA.test(fingerprint)) {
+    return { tipo: 'rota', motivo: 'la huella no es un sha256 de 64 caracteres' }
+  }
+  const description = cadena(guardada, 'description')
+  if (description === null) {
+    // Inventarle una descripción sería escribir en el libro un texto que no
+    // dijo nadie, y el libro es lo que después se compara contra el extracto.
+    return { tipo: 'rota', motivo: 'no trae la descripción del movimiento' }
+  }
+  const externalId = cadena(guardada, 'externalId')
+  const memo = cadena(guardada, 'memo')
+
+  return {
+    tipo: 'lista',
+    transaccion: {
+      bookedOn,
+      description,
+      amount: BigInt(amountMinor),
+      currency: currency.toUpperCase(),
+      fingerprint,
+      ...(valuedOn === null ? {} : { valuedOn }),
+      ...(externalId === null ? {} : { externalId }),
+      ...(memo === null ? {} : { memo }),
+    },
+  }
+}
+
+function cadena(fuente: Record<string, unknown>, clave: string): string | null {
+  const valor = fuente[clave]
+  return typeof valor === 'string' && valor.trim() !== '' ? valor : null
 }

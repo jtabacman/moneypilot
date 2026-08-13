@@ -1,0 +1,72 @@
+/*
+ * Lo propio de /reglas. Todo lo demás sale de globals.css: acá sólo vive lo que
+ * ninguna otra pantalla necesita —la rejilla del formulario, el patrón en
+ * monoespaciada y la marca de lo que se pisaría—, porque una regla que se
+ * comparte con doce pantallas no puede vivir en la carpeta de una.
+ */
+
+/* ── Formulario ──────────────────────────────────────────────────────────── */
+
+.campos {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+	gap: var(--s4);
+	align-items: start;
+}
+
+.campo {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+/* El texto que busca la regla y la categoría de destino son las dos decisiones
+   de verdad del formulario: ocupan la fila entera para que se lean primero. */
+.ancho {
+	grid-column: 1 / -1;
+}
+
+.casilla {
+	justify-content: flex-end;
+}
+
+.acciones {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--s3);
+	align-items: center;
+	padding: 0 var(--s4) var(--s4);
+}
+
+.aplicar {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s3);
+	align-items: flex-start;
+}
+
+/* ── Lista ───────────────────────────────────────────────────────────────── */
+
+.busqueda {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+
+/* El patrón va en monoespaciada porque un espacio de más o una mayúscula de
+   menos cambian a qué movimientos alcanza la regla. */
+.patron {
+	font-family: var(--mono);
+	font-size: var(--t-mini);
+	background: var(--bar);
+	padding: 1px 5px;
+	border-radius: 2px;
+	overflow-wrap: anywhere;
+}
+
+.pisa {
+	display: inline-flex;
+	flex-wrap: wrap;
+	gap: var(--s2);
+	align-items: center;
+}

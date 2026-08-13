@@ -107,6 +107,66 @@ details[open] > .sumario::after {
 	box-shadow: inset 3px 0 0 var(--rule-strong);
 }
 
+/* ── Clasificar desde la tabla ───────────────────────────────────────────── */
+
+/* La columna de las casillas: lo más angosta posible y sin envolver, para que
+   no le robe sitio a la descripción, que es lo que se lee. */
+.marcar {
+	width: 1%;
+	white-space: nowrap;
+	text-align: center;
+	vertical-align: middle;
+}
+
+/* El atajo a la regla se ve siempre, en tinta apagada. Esconderlo detrás del
+   hover lo haría invisible en una tabla táctil y, sobre todo, invisible para
+   quien no sabe que existe — que es justo a quien hay que enseñarle que
+   clasificar de a uno no es el camino. */
+.regla {
+	display: inline-block;
+	margin-top: 3px;
+	color: var(--ink-faint);
+	text-decoration: none;
+	border-bottom: 1px dotted var(--rule-strong);
+}
+.regla:hover,
+.regla:focus-visible {
+	color: var(--accent);
+	border-bottom-color: var(--accent);
+}
+
+.barra {
+	display: grid;
+	gap: var(--s3);
+}
+
+.campos {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+	gap: var(--s4);
+	align-items: start;
+}
+
+.aplicar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--s3);
+	flex-wrap: wrap;
+}
+
+/*
+ * Cuando hay algo marcado, la barra se destaca. Es una mejora y no la forma de
+ * verla: si `:has()` no existe, la barra sigue exactamente donde estaba, con
+ * todo funcionando. Al revés —esconderla y revelarla— dejaría la pantalla sin
+ * manera de clasificar en un navegador viejo.
+ */
+form:has(input[name="mov"]:checked) .barra,
+form:has(input[name="todos"]:checked) .barra {
+	background: var(--accent-soft);
+	box-shadow: inset 0 2px 0 var(--accent);
+}
+
 /* ── Chips de filtro activo ──────────────────────────────────────────────── */
 
 .quitar {

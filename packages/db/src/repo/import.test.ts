@@ -12,9 +12,16 @@
 
 import { createHash } from 'node:crypto'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { createPool, type Db, withoutTenantScope, withTenant } from '../client.js'
+import {
+  createPool,
+  type Db,
+  type TenantClient,
+  withoutTenantScope,
+  withTenant,
+} from '../client.js'
 import { migrate } from '../migrate.js'
 import {
+  bookTransaction,
   listImportBatches,
   type PersistableTransaction,
   type PersistImportInput,
@@ -409,6 +416,183 @@ suite('importación en un lote reversible', () => {
       ),
     )
     expect(asientos).toBe(1)
+  })
+
+  /* ── Materializar lo que esperaba en la cola ───────────────────────────── */
+
+  /**
+   * Lo que hace /revisar al aceptar una fila: leer la transacción de la
+   * evidencia y volver a armarla. El importe está guardado como TEXTO, así que
+   * el paso por `BigInt` es parte de lo que hay que probar — con `Number`, un
+   * patrimonio en céntimos pierde céntimos sin avisar.
+   */
+  async function laQueEspera(
+    client: TenantClient,
+  ): Promise<{ transaction: PersistableTransaction; batchId: string }> {
+    const { rows } = await client.query<{
+      transaccion: Record<string, string | null>
+      batch: string
+    }>(
+      `select evidence->'transaccion' as transaccion, import_batch_id::text as batch
+         from review_item limit 1`,
+    )
+    const fila = rows[0]
+    if (fila === undefined) throw new Error('No hay ninguna fila esperando en la cola.')
+    const guardada = fila.transaccion
+    return {
+      batchId: fila.batch,
+      transaction: {
+        bookedOn: guardada['bookedOn'] as string,
+        description: guardada['description'] as string,
+        amount: BigInt(guardada['amountMinor'] as string),
+        currency: guardada['currency'] as string,
+        fingerprint: guardada['fingerprint'] as string,
+      },
+    }
+  }
+
+  it('materializar una fila de la cola crea el asiento con sus dos patas y balancea a cero', async () => {
+    await enHogar((client) =>
+      persistImport(client, {
+        ...entrada('materializa', [movimiento('mat-0', -1200n)]),
+        needsReview: [
+          { transaction: movimiento('mat-1', -8875n), evidence: { reason: 'fuzzy', dayGap: 1 } },
+        ],
+      }),
+    )
+
+    const entryId = await enHogar(async (client) => {
+      const espera = await laQueEspera(client)
+      return bookTransaction(client, {
+        accountId: cuenta,
+        batchId: espera.batchId,
+        transaction: espera.transaction,
+      })
+    })
+
+    const patas = await enHogar(async (client) => {
+      const { rows } = await client.query<{ ordinal: number; amount: string; name: string }>(
+        `select p.ordinal, p.amount, a.name
+           from posting p join account a on a.id = p.account_id
+          where p.entry_id = $1::uuid order by p.ordinal`,
+        [entryId],
+      )
+      return rows
+    })
+
+    expect(patas).toEqual([
+      { ordinal: 0, amount: '-8875', name: 'BBVA Corriente' },
+      { ordinal: 1, amount: '8875', name: 'Sin categorizar (EUR)' },
+    ])
+    // Lo que hace comprobable el libro: la suma de las patas es cero por moneda.
+    expect(patas.reduce((total, pata) => total + BigInt(pata.amount), 0n)).toBe(0n)
+  })
+
+  it('el asiento materializado cuelga del lote que trajo la fila, así que se deshace con él', async () => {
+    const lote = await enHogar((client) =>
+      persistImport(client, {
+        ...entrada('materializa-lote', [movimiento('mat-2', -100n)]),
+        needsReview: [{ transaction: movimiento('mat-3', -777n), evidence: {} }],
+      }),
+    )
+
+    await enHogar(async (client) => {
+      const espera = await laQueEspera(client)
+      return bookTransaction(client, {
+        accountId: cuenta,
+        batchId: espera.batchId,
+        transaction: espera.transaction,
+      })
+    })
+    expect(await saldos()).not.toEqual({})
+
+    const revertido = await enHogar((client) => revertImport(client, lote.batchId))
+    // El importado y el materializado: los dos son del lote.
+    expect(revertido.removedEntries).toBe(2)
+    expect(await saldos()).toEqual({})
+  })
+
+  it('materializar en una moneda que no es la de la cuenta falla y no deja medio asiento', async () => {
+    await enHogar((client) =>
+      persistImport(client, {
+        ...entrada('materializa-divisa', [movimiento('mat-4', -100n)]),
+        needsReview: [{ transaction: movimiento('mat-5', -500n), evidence: {} }],
+      }),
+    )
+
+    await expect(
+      enHogar(async (client) => {
+        const espera = await laQueEspera(client)
+        return bookTransaction(client, {
+          accountId: cuenta,
+          batchId: espera.batchId,
+          transaction: { ...espera.transaction, currency: 'USD' },
+        })
+      }),
+    ).rejects.toThrow(/USD.*EUR|EUR.*USD/)
+
+    // Un asiento a medias sería peor que no asentar: la transacción revierte
+    // entera, así que el libro se queda con el único movimiento que importó.
+    const conteo = await enHogar(async (client) => {
+      const { rows } = await client.query<{ asientos: string; postings: string }>(
+        `select (select count(*) from entry)::text as asientos,
+                (select count(*) from posting)::text as postings`,
+      )
+      return rows[0]
+    })
+    expect(conteo).toEqual({ asientos: '1', postings: '2' })
+  })
+
+  it('materializar dos veces la misma fila rebota contra la huella única', async () => {
+    await enHogar((client) =>
+      persistImport(client, {
+        ...entrada('materializa-doble', [movimiento('mat-6', -100n)]),
+        needsReview: [{ transaction: movimiento('mat-7', -640n), evidence: {} }],
+      }),
+    )
+
+    const asentar = () =>
+      enHogar(async (client) => {
+        const espera = await laQueEspera(client)
+        return bookTransaction(client, {
+          accountId: cuenta,
+          batchId: espera.batchId,
+          transaction: espera.transaction,
+        })
+      })
+
+    await asentar()
+    // La huella es la garantía de idempotencia del libro: sin ella, dos clicks
+    // seguidos en «no es duplicado» meterían el movimiento dos veces.
+    await expect(asentar()).rejects.toThrow(/fingerprint/i)
+
+    const asientos = await enHogar(async (client) =>
+      Number(
+        (await client.query<{ n: string }>('select count(*)::text as n from entry')).rows[0]?.n,
+      ),
+    )
+    expect(asientos).toBe(2)
+  })
+
+  it('materializar contra una cuenta de otro hogar no encuentra la cuenta', async () => {
+    await enHogar((client) =>
+      persistImport(client, {
+        ...entrada('materializa-ajena', [movimiento('mat-8', -100n)]),
+        needsReview: [{ transaction: movimiento('mat-9', -900n), evidence: {} }],
+      }),
+    )
+    const vecino = await nuevoHogar('cuenta-ajena')
+
+    await expect(
+      enHogar(async (client) => {
+        const espera = await laQueEspera(client)
+        return bookTransaction(client, {
+          accountId: vecino.accountId,
+          batchId: espera.batchId,
+          transaction: espera.transaction,
+        })
+      }),
+    ).rejects.toThrow(/no existe en este hogar/)
   })
 
   it('guarda los saldos declarados del extracto atados al lote', async () => {
