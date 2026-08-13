@@ -1,26 +1,50 @@
 /**
- * Lectura de JSON en la que ningún número llega a ser un `number`.
+ * JSON en el que ningún número llega a ser nunca un `number`.
  *
- * finAPI manda los importes como literales numéricos de JSON:
- * `"amount":-135.89`. `JSON.parse` los convierte a coma flotante IEEE-754
- * antes de que nuestro código vea nada, y a partir de ahí el daño es
- * irreversible: los dígitos que el binario no puede representar ya no están.
- * No es teórico — el sandbox devuelve importes de catorce dígitos, y
- * `JSON.parse('99999999999999.99')` da `99999999999999.98`. Un céntimo de
- * menos, en silencio, en la primera línea del cliente.
+ * Lo usan todos los clientes de agregador —finAPI, Plaid— porque todos tienen
+ * el mismo agujero: mandan los importes como literales numéricos de JSON
+ * (`"amount":-135.89`) y `JSON.parse` los convierte a coma flotante IEEE-754
+ * antes de que nuestro código vea nada. Todo el núcleo está sobre `bigint`
+ * justamente para que eso no ocurra; sería absurdo dejarlo entrar por la puerta
+ * de la red. Por eso vive en `lib/` y no dentro de la carpeta de un proveedor.
  *
- * Todo el núcleo está sobre `bigint` justamente para que eso no ocurra. Sería
- * absurdo dejarlo entrar por la puerta de la red.
+ * ── Cómo se rompe, con datos de verdad ──────────────────────────────────────
  *
- * La técnica: antes de deserializar se reescribe el texto crudo
- * entrecomillando **todos** los literales numéricos. El documento que llega a
- * `JSON.parse` no tiene un solo número, así que no hay nada que redondear. Los
- * pocos enteros que sí necesitamos como `number` —número de página, id de
- * banco— se convierten después, de uno en uno y a propósito, con
- * `enteroSeguro`.
+ * En finAPI el daño está en el propio `JSON.parse`: el sandbox devuelve
+ * importes de catorce dígitos y `JSON.parse('99999999999999.99')` da
+ * `99999999999999.98`. Un céntimo de menos, en silencio, en la primera línea
+ * del cliente.
+ *
+ * En Plaid el daño es un paso más tarde y por eso engaña más. Sus importes
+ * sobreviven al `JSON.parse` —comprobado contra su sandbox: los 48 movimientos
+ * del banco de prueba vuelven a imprimirse idénticos—, así que quien mire sólo
+ * ahí concluye que no hay problema. El problema aparece en cuanto alguien hace
+ * cuentas con esos `number`:
+ *
+ *   - Sumando los 48 importes en coma flotante, **13 de las 48 sumas parciales
+ *     salen mal**: a la cuarta ya va `-478.27000000000004`.
+ *   - `/accounts/get` devuelve el saldo `23631.9805`, con cuatro decimales. El
+ *     truco de siempre para pasar a céntimos, `saldo * 100`, da
+ *     `2363198.0500000003`; con `Math.trunc` eso es un céntimo perdido.
+ *
+ * O sea que en Plaid la garantía que compra este módulo no es "JSON.parse no
+ * redondea" sino algo más fuerte: **nunca hay un `number` con el que hacer
+ * cuentas**. El texto decimal exacto viaja hasta `fromDecimalString`, que lo
+ * convierte a `bigint`, y la aritmética entera no se desvía jamás. De paso deja
+ * de depender de un detalle no documentado del serializador de Plaid, que hoy
+ * emite la representación más corta que reconstruye el `float64` y mañana
+ * puede no hacerlo.
+ *
+ * ── La técnica ──────────────────────────────────────────────────────────────
+ *
+ * Antes de deserializar se reescribe el texto crudo entrecomillando **todos**
+ * los literales numéricos. El documento que llega a `JSON.parse` no tiene un
+ * solo número, así que no hay nada que redondear. Los pocos enteros que sí
+ * necesitamos como `number` —número de página, total del catálogo— se
+ * convierten después, de uno en uno y a propósito, con `enteroSeguro`.
  *
  * Se entrecomillan todos y no sólo los campos de importe conocidos porque una
- * lista de campos hay que mantenerla: el día que finAPI añada `feeAmount`
+ * lista de campos hay que mantenerla: el día que el proveedor añada `feeAmount`
  * nadie se enteraría de que se está redondeando, el importe saldría mal y no
  * habría error en ningún sitio. Además protege de paso los identificadores
  * largos, que en coma flotante pierden precisión igual que el dinero.
@@ -29,6 +53,9 @@
  * una regex confundiría el `-135.89` que viene dentro del concepto de un
  * movimiento con un literal numérico. Acá las cadenas se copian enteras sin
  * mirarlas por dentro.
+ *
+ * La ida tiene el mismo problema que la vuelta y está al final del fichero:
+ * ver `serializarConDecimalesExactos`.
  */
 
 /** Un documento ya leído: no existe la variante `number` a propósito. */
@@ -167,7 +194,7 @@ export function enteroSeguro(texto: string, donde: string): number {
  * Aplana el objeto a `clave -> texto` para guardarlo en el `raw` de la línea.
  *
  * El contrato de los parsers es "lo que no cabe en un campo tipado va a `raw`,
- * sin perder nada", y un movimiento de finAPI trae categoría, etiquetas y
+ * sin perder nada", y un movimiento de agregador trae categoría, etiquetas y
  * datos de la contraparte anidados. Se aplanan con clave punteada
  * (`category.name`, `labels.0`) en vez de serializarlos a JSON porque dentro
  * de seis meses alguien va a tener que leer esto para explicar un asiento.
@@ -196,4 +223,77 @@ export function aplanar(valor: ValorJson, prefijo = ''): Record<string, string> 
   }
   visitar(valor, prefijo)
   return salida
+}
+
+// ── Serialización: el mismo problema, de salida ─────────────────────────────
+
+/**
+ * Un decimal que hay que escribir en el cuerpo **tal cual**, sin pasar por
+ * `number`.
+ *
+ * Existe porque el peligro no es sólo de entrada. `/transactions/enrich` de
+ * Plaid recibe el importe como literal numérico de JSON, y el importe que le
+ * mandamos sale de nuestro libro, donde es un `bigint` con su representación
+ * decimal exacta. Escribirlo con `JSON.stringify({ amount: Number(texto) })`
+ * lo hace pasar por coma flotante en el último metro, después de que todo el
+ * resto del sistema se haya cuidado de evitarlo.
+ */
+export class DecimalExacto {
+  constructor(readonly texto: string) {
+    if (!/^-?\d+(\.\d+)?$/.test(texto)) {
+      throw new JsonExactoError(
+        `No es un decimal que se pueda escribir en JSON: ${JSON.stringify(texto)}`,
+      )
+    }
+  }
+}
+
+export function decimalExacto(texto: string): DecimalExacto {
+  return new DecimalExacto(texto)
+}
+
+/**
+ * Serializa dejando cada `DecimalExacto` como el literal numérico exacto.
+ *
+ * `JSON.stringify` no tiene forma de emitir texto crudo en posición de valor,
+ * así que se hace en dos pasos: primero cada decimal se sustituye por una
+ * cadena centinela, se serializa normalmente, y después se reemplaza la
+ * cadena —con sus comillas— por el literal.
+ *
+ * El centinela lleva un nonce aleatorio por llamada. Sin él, un concepto de
+ * movimiento que contuviera por casualidad el texto del centinela saldría
+ * convertido en número y rompería el cuerpo; con él la colisión no es
+ * plausible. Y el literal ya está validado por el constructor, así que lo que
+ * se inyecta no puede ser otra cosa que dígitos, un punto y un signo.
+ */
+export function serializarConDecimalesExactos(valor: unknown): string {
+  const literales: string[] = []
+  const nonce = `d${crypto.randomUUID().replaceAll('-', '')}`
+
+  const sustituir = (actual: unknown): unknown => {
+    if (actual instanceof DecimalExacto) {
+      literales.push(actual.texto)
+      return `${nonce}${literales.length - 1}`
+    }
+    if (Array.isArray(actual)) return actual.map(sustituir)
+    if (typeof actual === 'object' && actual !== null) {
+      return Object.fromEntries(
+        Object.entries(actual as Record<string, unknown>).map(([clave, valor]) => [
+          clave,
+          sustituir(valor),
+        ]),
+      )
+    }
+    return actual
+  }
+
+  const texto = JSON.stringify(sustituir(valor))
+  if (literales.length === 0) return texto
+  return texto.replaceAll(new RegExp(`"${nonce}(\\d+)"`, 'g'), (_coincidencia, indice: string) => {
+    const literal = literales[Number(indice)]
+    // Inalcanzable salvo bug: los índices los generamos nosotros dos líneas
+    // arriba. Fallar es mejor que escribir "undefined" en un cuerpo de dinero.
+    if (literal === undefined) throw new JsonExactoError('Centinela decimal sin literal asociado')
+    return literal
+  })
 }

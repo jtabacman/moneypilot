@@ -22,10 +22,12 @@ import {
 import { migrate } from '../migrate.js'
 import {
   bookTransaction,
+  findFeedEntries,
   listImportBatches,
   type PersistableTransaction,
   type PersistImportInput,
   persistImport,
+  reverseEntry,
   revertImport,
   updateBookedTransaction,
 } from './import.js'
@@ -1355,6 +1357,139 @@ suite('importación en un lote reversible', () => {
             fingerprint: hash(`${RUN}-vecino-2`),
           },
         }),
+      ),
+    ).rejects.toThrow(/no existe en este hogar/)
+  })
+
+  // ── Anular lo que el feed retiró ─────────────────────────────────────────
+  //
+  // El caso lo trae Plaid: `/transactions/sync` devuelve `removed`, o sea
+  // movimientos que el proveedor dice que ya no existen. Borrarlos está
+  // descartado —el libro es append-only para lo que ya se enseñó— y no tocarlos
+  // es peor, porque la apertura que se recalcula contra el saldo declarado se
+  // come la diferencia en silencio. Queda anularlos, que es esto.
+
+  it('la anulación es un espejo exacto: mismas cuentas, importes negados', async () => {
+    await enHogar((client) => persistImport(client, delFeed('espejo', -2500n)))
+    const antes = await elAsiento()
+
+    const anulacion = await enHogar((client) => reverseEntry(client, { entryId: antes.entryId }))
+    expect(anulacion.created).toBe(true)
+
+    const original = await estado(antes.entryId)
+    const espejo = await estado(anulacion.reversalId)
+    expect(original.map((pata) => pata.amount)).toEqual(['-2500', '2500'])
+    // Las mismas cuentas y no la bolsa de sin categorizar: si el gasto estaba
+    // atribuido a una categoría, la anulación tiene que descontarlo de ahí.
+    expect(espejo.map((pata) => pata.amount)).toEqual(['2500', '-2500'])
+
+    const cuentas = await enHogar(async (client) => {
+      const { rows } = await client.query<{ entry_id: string; account_id: string }>(
+        'select entry_id, account_id from posting order by entry_id, ordinal',
+      )
+      return rows
+    })
+    const deOriginal = cuentas.filter((fila) => fila.entry_id === antes.entryId)
+    const deEspejo = cuentas.filter((fila) => fila.entry_id === anulacion.reversalId)
+    expect(deEspejo.map((fila) => fila.account_id)).toEqual(
+      deOriginal.map((fila) => fila.account_id),
+    )
+
+    // El saldo vuelve a cero por suma y no por omisión: los postings del
+    // original siguen ahí, y al lado están los del espejo.
+    expect(Object.values(await saldos())).toEqual(['0', '0'])
+  })
+
+  it('la anulación no lleva huella ni identificador externo', async () => {
+    await enHogar((client) => persistImport(client, delFeed('sin-identidad', -100n)))
+    const antes = await elAsiento()
+    const anulacion = await enHogar((client) => reverseEntry(client, { entryId: antes.entryId }))
+
+    const espejo = await enHogar(async (client) => {
+      const { rows } = await client.query<{
+        fingerprint: string | null
+        external_id: string | null
+        booked_on: string
+        batch: string | null
+      }>(
+        `select e.fingerprint, e.external_id, to_char(e.booked_on, 'YYYY-MM-DD') as booked_on,
+                e.import_batch_id as batch
+           from entry e where e.id = $1`,
+        [anulacion.reversalId],
+      )
+      return rows[0]
+    })
+    // Con huella, el dedup podría tomarla por el duplicado de una fila del
+    // extracto; con identificador externo, el dedup de origen 'api' encontraría
+    // dos asientos para el mismo movimiento del proveedor.
+    expect(espejo?.fingerprint).toBeNull()
+    expect(espejo?.external_id).toBeNull()
+    // Va con la fecha del original: un movimiento que el banco dice que nunca
+    // ocurrió tiene que desaparecer del mes en el que se contó.
+    expect(espejo?.booked_on).toBe('2026-03-14')
+    // Y sin lote, para no dejar imposible de deshacer el lote que la trajo.
+    expect(espejo?.batch).toBeNull()
+  })
+
+  it('anular dos veces no mueve el saldo al doble', async () => {
+    await enHogar((client) => persistImport(client, delFeed('idempotente', -700n)))
+    const antes = await elAsiento()
+
+    const primera = await enHogar((client) => reverseEntry(client, { entryId: antes.entryId }))
+    const segunda = await enHogar((client) => reverseEntry(client, { entryId: antes.entryId }))
+
+    expect(segunda.created).toBe(false)
+    expect(segunda.reversalId).toBe(primera.reversalId)
+    expect(Object.values(await saldos())).toEqual(['0', '0'])
+  })
+
+  it('el lote del asiento anulado ya no se puede deshacer, y se dice por qué', async () => {
+    const lote = await enHogar((client) => persistImport(client, delFeed('bloqueado', -400n)))
+    const antes = await elAsiento()
+    await enHogar((client) => reverseEntry(client, { entryId: antes.entryId }))
+
+    // No es un fallo del diseño: es el diseño. Borrar el original dejaría a su
+    // espejo moviendo el saldo solo, en silencio y para siempre.
+    await expect(enHogar((client) => revertImport(client, lote.batchId))).rejects.toThrow(
+      /asientos de anulación/,
+    )
+  })
+
+  it('encuentra por identificador del proveedor sólo lo que entró por feed', async () => {
+    await enHogar((client) =>
+      persistImport(client, {
+        ...entrada('busqueda', [
+          { ...movimiento('busqueda', -1000n), externalId: 'tx-del-proveedor' },
+        ]),
+        source: 'api',
+      }),
+    )
+    await enHogar((client) =>
+      persistImport(client, {
+        ...entrada('de-fichero', [
+          { ...movimiento('de-fichero', -2000n), externalId: 'tx-del-proveedor' },
+        ]),
+      }),
+    )
+
+    const encontrados = await enHogar((client) =>
+      findFeedEntries(client, cuenta, ['tx-del-proveedor', 'no-existe']),
+    )
+    // Uno y no dos: un identificador externo sólo significa algo dentro del
+    // feed que lo emitió, y el FITID de un OFX puede coincidir por casualidad.
+    expect(encontrados).toHaveLength(1)
+    expect(encontrados[0]?.amount).toBe(-1000n)
+    expect(encontrados[0]?.reversedBy).toBeNull()
+  })
+
+  it('el hogar de al lado no puede anular el asiento', async () => {
+    await enHogar((client) => persistImport(client, delFeed('vecino-anula', -900n)))
+    const antes = await elAsiento()
+    const vecino = await nuevoHogar('vecino-anulacion')
+
+    await expect(
+      withTenant(app, vecino.tenantId, (client) =>
+        reverseEntry(client, { entryId: antes.entryId }),
       ),
     ).rejects.toThrow(/no existe en este hogar/)
   })

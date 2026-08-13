@@ -17,7 +17,15 @@
 import type { TenantClient } from '../client.js'
 import type { AccountKind } from './read-ledger.js'
 
-export type FeedProvider = 'finapi'
+/**
+ * Los proveedores que existen, y el mismo valor que el enum de la base.
+ *
+ * Es una unión y no un `string` porque lo que distingue a un feed de otro no
+ * es sólo la red: cada uno tiene su convenio de signo, su idea de qué es una
+ * conexión y su forma de decir "esto ya lo mandé". El compilador tiene que
+ * poder pedir que se declare cuál es.
+ */
+export type FeedProvider = 'finapi' | 'plaid'
 
 export class FeedRepoError extends Error {
   constructor(message: string) {
@@ -148,8 +156,23 @@ export interface FeedConnectionRow {
   readonly provider: FeedProvider
   readonly bankId: string
   readonly bankName: string
-  readonly webFormId: string
+  /**
+   * El formulario web del agregador. `null` en los proveedores que no tienen
+   * ninguno: Plaid autentica dentro de su propio widget y no deja nada que se
+   * pueda volver a sondear. Ver la migración 009.
+   */
+  readonly webFormId: string | null
   readonly bankConnectionId: string | null
+  /** El item de Plaid. `null` en finAPI, que no tiene ese concepto. */
+  readonly itemId: string | null
+  /**
+   * El cursor de la última sincronización incremental. `null` mientras no haya
+   * habido ninguna, que se lee como "traé todo el histórico".
+   *
+   * **Nunca lo escribe quien no acaba de asentar lo que el cursor deja atrás.**
+   * Ver `saveSyncCursor`.
+   */
+  readonly syncCursor: string | null
   /** Lo que dice el proveedor, sin traducir. Ver la migración 008. */
   readonly status: string
   readonly errorDetail: string | null
@@ -162,16 +185,28 @@ interface ConnectionDbRow {
   provider: FeedProvider
   bank_id: string
   bank_name: string
-  web_form_id: string
+  web_form_id: string | null
   bank_connection_id: string | null
+  item_id: string | null
+  sync_cursor: string | null
   status: string
   error_detail: string | null
   created_at: Date
   updated_at: Date
 }
 
+/**
+ * `access_secret` NO está en esta lista, y no es un olvido.
+ *
+ * Una `FeedConnectionRow` viaja hasta la pantalla —`/importar` la lee y le
+ * pasa los campos a un componente de cliente—, así que todo lo que esté acá
+ * dentro es un candidato a acabar en el navegador el día que alguien añada un
+ * campo al mapeo de props. La credencial se lee aparte y a propósito, con
+ * `readConnectionSecret`, desde el único sitio que la necesita.
+ */
 const CONNECTION_COLUMNS = `id, provider::text as provider, bank_id, bank_name, web_form_id,
-                            bank_connection_id, status, error_detail, created_at, updated_at`
+                            bank_connection_id, item_id, sync_cursor, status, error_detail,
+                            created_at, updated_at`
 
 function toConnection(row: ConnectionDbRow): FeedConnectionRow {
   return {
@@ -181,6 +216,8 @@ function toConnection(row: ConnectionDbRow): FeedConnectionRow {
     bankName: row.bank_name,
     webFormId: row.web_form_id,
     bankConnectionId: row.bank_connection_id,
+    itemId: row.item_id,
+    syncCursor: row.sync_cursor,
     status: row.status,
     errorDetail: row.error_detail,
     createdAt: row.created_at.toISOString(),
@@ -192,7 +229,19 @@ export interface RecordConnectionInput {
   readonly provider: FeedProvider
   readonly bankId: string
   readonly bankName: string
-  readonly webFormId: string
+  /**
+   * Obligatorio en finAPI —la base lo exige con un check— y ausente en Plaid.
+   * Ver la migración 009.
+   */
+  readonly webFormId?: string | null
+  /** El item de Plaid, conocido ya al canjear el token público. */
+  readonly itemId?: string | null
+  /**
+   * La credencial de larga duración de esta conexión. En Plaid es el
+   * `access_token`, que no caduca; en finAPI no hay ninguna, porque el secreto
+   * es del usuario del hogar y vive en `feed_user`.
+   */
+  readonly accessSecret?: string | null
   readonly status: string
 }
 
@@ -202,16 +251,85 @@ export async function recordConnection(
 ): Promise<FeedConnectionRow> {
   const tenantId = await currentTenant(client)
   const { rows } = await client.query<ConnectionDbRow>(
-    `insert into feed_connection (tenant_id, provider, bank_id, bank_name, web_form_id, status)
-     values ($1, $2::feed_provider, $3, $4, $5, $6)
+    `insert into feed_connection
+       (tenant_id, provider, bank_id, bank_name, web_form_id, item_id, access_secret, status)
+     values ($1, $2::feed_provider, $3, $4, $5, $6, $7, $8)
      returning ${CONNECTION_COLUMNS}`,
-    [tenantId, input.provider, input.bankId, input.bankName, input.webFormId, input.status],
+    [
+      tenantId,
+      input.provider,
+      input.bankId,
+      input.bankName,
+      input.webFormId ?? null,
+      input.itemId ?? null,
+      input.accessSecret ?? null,
+      input.status,
+    ],
   )
   const row = rows[0]
   if (row === undefined) {
     throw new FeedRepoError(`No se pudo registrar la conexión con ${input.bankName}.`)
   }
   return toConnection(row)
+}
+
+/**
+ * La credencial de la conexión, y nada más.
+ *
+ * Es una función aparte para que el secreto no viaje dentro de la fila que se
+ * lee en todas partes: ver el comentario de `CONNECTION_COLUMNS`. Quien la
+ * llama tiene una sola razón para hacerlo —salir a la red por esa conexión— y
+ * no debe guardarla en ningún sitio ni escribirla en un log.
+ */
+export async function readConnectionSecret(
+  client: TenantClient,
+  connectionId: string,
+): Promise<string | null> {
+  if (!UUID_RE.test(connectionId)) return null
+  const { rows } = await client.query<{ access_secret: string | null }>(
+    'select access_secret from feed_connection where id = $1',
+    [connectionId],
+  )
+  const secreto = rows[0]?.access_secret ?? null
+  return secreto === null || secreto.trim() === '' ? null : secreto
+}
+
+export interface SaveSyncCursorInput {
+  readonly id: string
+  /** El cursor que devolvió la última página leída. */
+  readonly cursor: string
+}
+
+/**
+ * Guarda el cursor de sincronización incremental de una conexión.
+ *
+ * **Sólo se llama en la misma transacción que asienta lo que ese cursor deja
+ * atrás**, y de ahí que sea una función suelta y no un campo más de
+ * `updateConnection`: escribirlo antes de que los movimientos estén en el
+ * libro los pierde para siempre, porque el proveedor no los vuelve a mandar.
+ * El error inverso es inofensivo: un cursor que se queda corto hace que la
+ * próxima sincronización repita lo ya traído, y eso lo absorbe el dedup.
+ *
+ * La cadena vacía se guarda como `null`: es lo que Plaid devuelve mientras el
+ * item todavía no tiene nada que contar, y significa exactamente lo mismo que
+ * no tener cursor.
+ */
+export async function saveSyncCursor(
+  client: TenantClient,
+  input: SaveSyncCursorInput,
+): Promise<void> {
+  if (!UUID_RE.test(input.id)) {
+    throw new FeedRepoError(`id de conexión inválido: ${JSON.stringify(input.id)}`)
+  }
+  const cursor = input.cursor.trim() === '' ? null : input.cursor
+  const result = await client.query(
+    'update feed_connection set sync_cursor = $2, updated_at = now() where id = $1',
+    [input.id, cursor],
+  )
+  if ((result.rowCount ?? 0) === 0) {
+    // Con RLS, la conexión de otro hogar es indistinguible de una inexistente.
+    throw new FeedRepoError(`La conexión ${input.id} no existe en este hogar.`)
+  }
 }
 
 export interface UpdateConnectionInput {

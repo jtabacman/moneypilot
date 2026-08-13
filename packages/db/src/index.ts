@@ -67,6 +67,7 @@ export type {
   FeedUserRow,
   RecordConnectionInput,
   SaveFeedUserInput,
+  SaveSyncCursorInput,
   UpdateConnectionInput,
 } from './repo/feed.js'
 export {
@@ -77,9 +78,11 @@ export {
   listFeedAccounts,
   markFeedAccountSynced,
   readConnection,
+  readConnectionSecret,
   readFeedUser,
   recordConnection,
   saveFeedUser,
+  saveSyncCursor,
   updateConnection,
 } from './repo/feed.js'
 export type {
@@ -87,6 +90,7 @@ export type {
   DeclaredBalanceInput,
   EnsureOpeningEntryInput,
   EnsureOpeningEntryResult,
+  FeedEntryRow,
   ImportBatchRow,
   ImportBatchStatus,
   NeedsReviewTransaction,
@@ -95,6 +99,8 @@ export type {
   PersistableTransaction,
   PersistImportInput,
   PersistImportResult,
+  ReverseEntryInput,
+  ReverseEntryResult,
   UpdateBookedTransactionInput,
   UpdateBookedTransactionResult,
   UpdatedField,
@@ -102,10 +108,12 @@ export type {
 export {
   bookTransaction,
   ensureOpeningEntry,
+  findFeedEntries,
   listImportBatches,
   OPENING_ENTRY_DESCRIPTION,
   persistImport,
   readOpeningEntry,
+  reverseEntry,
   revertImport,
   updateBookedTransaction,
 } from './repo/import.js'

@@ -9,18 +9,22 @@ export type { CsvRow, Delimiter } from './csv/tokenize.js'
 export { detectDelimiter, tokenizeCsv } from './csv/tokenize.js'
 export type { FormatDetection } from './detect.js'
 export { detectFormat } from './detect.js'
-export type {
-  FinapiRawAccount,
-  FinapiRawTransaction,
-  MapFinapiOptions,
-} from './finapi/map.js'
-export { mapFinapiAccount, mapFinapiStatements } from './finapi/map.js'
 export type { N43ParseOptions } from './n43/parse.js'
 export { parseN43 } from './n43/parse.js'
 export type { OfxParseOptions } from './ofx/parse.js'
 export { parseOfx, parseOfxDate } from './ofx/parse.js'
 export type { OfxNode } from './ofx/tokenize.js'
 export { parseOfxTree } from './ofx/tokenize.js'
+export type {
+  MapPlaidOptions,
+  PlaidBalances,
+  PlaidCounterparty,
+  PlaidLocation,
+  PlaidPersonalFinanceCategory,
+  PlaidRawAccount,
+  PlaidRawTransaction,
+} from './plaid/map.js'
+export { mapPlaidAccount, mapPlaidStatements } from './plaid/map.js'
 export type { QifParseOptions } from './qif/parse.js'
 export { parseQif } from './qif/parse.js'
 export type { DateOrder, DateOrderDetection } from './shared/dates.js'

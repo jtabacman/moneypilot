@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   aplanar,
   cadena,
+  decimalExacto,
   enteroSeguro,
   entrecomillarNumeros,
   JsonExactoError,
   objeto,
   parsearSinFlotantes,
+  serializarConDecimalesExactos,
 } from './json-exacto'
 
 describe('entrecomillarNumeros', () => {
@@ -104,5 +106,57 @@ describe('aplanar', () => {
 
   it('omite los nulos y las cadenas vacías en vez de guardar ruido', () => {
     expect(aplanar(parsearSinFlotantes('{"a":null,"b":"","c":"x"}'))).toEqual({ c: 'x' })
+  })
+})
+
+describe('serializarConDecimalesExactos', () => {
+  it('escribe el importe como literal numérico sin pasar por number', () => {
+    // El de siempre: por `Number` este importe sale con un céntimo de menos.
+    expect(Number('99999999999999.99').toFixed(2)).toBe('99999999999999.98')
+
+    const cuerpo = serializarConDecimalesExactos({ amount: decimalExacto('99999999999999.99') })
+    expect(cuerpo).toBe('{"amount":99999999999999.99}')
+  })
+
+  it('conserva los ceros de la derecha que JSON.stringify de un number borra', () => {
+    expect(JSON.stringify({ amount: 350.0 })).toBe('{"amount":350}')
+    expect(serializarConDecimalesExactos({ amount: decimalExacto('350.00') })).toBe(
+      '{"amount":350.00}',
+    )
+  })
+
+  it('deja intacto todo lo demás, incluidas las cadenas que parecen números', () => {
+    const cuerpo = serializarConDecimalesExactos({
+      id: '101',
+      description: 'COMPRA 12.34 EUR',
+      amount: decimalExacto('-135.89'),
+      pending: true,
+      location: { country: 'ES' },
+      lista: [decimalExacto('1.10'), decimalExacto('2.20')],
+    })
+    expect(cuerpo).toBe(
+      '{"id":"101","description":"COMPRA 12.34 EUR","amount":-135.89,"pending":true,' +
+        '"location":{"country":"ES"},"lista":[1.10,2.20]}',
+    )
+  })
+
+  it('no se deja engañar por un texto que imita al centinela', () => {
+    // El centinela lleva un nonce aleatorio justamente por esto. Si fuera fijo,
+    // un concepto de movimiento que lo contuviera saldría convertido en número
+    // y el cuerpo se rompería —o peor, colaría un importe inventado.
+    const cuerpo = serializarConDecimalesExactos({
+      description: 'd0000000000000000000000000000000',
+      amount: decimalExacto('1.00'),
+    })
+    expect(JSON.parse(cuerpo).description).toBe('d0000000000000000000000000000000')
+    expect(cuerpo).toContain('"amount":1.00')
+  })
+
+  it('rechaza lo que no es un decimal en vez de escribirlo en el cuerpo', () => {
+    expect(() => decimalExacto('1,5')).toThrow(JsonExactoError)
+    expect(() => decimalExacto('1e5')).toThrow(JsonExactoError)
+    expect(() => decimalExacto('')).toThrow(JsonExactoError)
+    // Sin esto, un `null` en el ledger acabaría siendo un literal en el cuerpo.
+    expect(() => decimalExacto('NaN')).toThrow(JsonExactoError)
   })
 })

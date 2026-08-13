@@ -27,15 +27,16 @@ import {
 import Link from 'next/link'
 import { Suspense } from 'react'
 import { readHousehold } from '@/lib/data'
-import { catalogoDePrueba } from '@/lib/finapi/catalogo'
-import { PROVEEDOR } from '@/lib/finapi/hogar'
 import { formatDate } from '@/lib/format'
 import { navItem } from '@/lib/nav'
+import { INSTITUCIONES_DE_PRUEBA } from '@/lib/plaid/catalogo'
+import { esSandbox, faltanCredenciales, hayCredenciales } from '@/lib/plaid/client'
+import { PROVEEDOR } from '@/lib/plaid/conexion'
 import { loadDemoData, unloadDemoData } from '../demo-actions'
 import { Empty, PageBar } from '../ui'
-import { type CatalogoVista, ConectarBanco, type ConexionAbierta } from './banco'
 import { Deshacer } from './deshacer'
 import styles from './page.module.css'
+import { ConectarPlaid, type ConexionPlaid } from './plaid'
 import { type CuentaElegible, Subida } from './upload'
 
 export const dynamic = 'force-dynamic'
@@ -74,17 +75,22 @@ export default async function ImportarPage() {
     // pantalla y manda a buscar un problema que no existe.
     const cuentas = await accountBalances(client)
     const lotes = await listImportBatches(client, LOTES)
-    const conexiones = await listConnections(client, PROVEEDOR)
-    return { cuentas, lotes, conexiones }
+    const conexionesPlaid = await listConnections(client, PROVEEDOR)
+    return { cuentas, lotes, conexionesPlaid }
   })
 
   const puede = puedeImportar(session.role)
 
-  const conexiones: ConexionAbierta[] = data.conexiones.map((conexion) => ({
+  // Al cliente sólo lo que la pantalla enseña, y en particular **nunca** la
+  // fila entera: `readConnectionSecret` mantiene el token del item fuera de
+  // `FeedConnectionRow` justamente para que un mapeo como éste no lo pueda
+  // filtrar por descuido. Del cursor cruza si existe, no cuál es.
+  const conexionesPlaid: ConexionPlaid[] = data.conexionesPlaid.map((conexion) => ({
     id: conexion.id,
     bankName: conexion.bankName,
     status: conexion.status,
     errorDetail: conexion.errorDetail,
+    incremental: conexion.syncCursor !== null,
     createdAt: conexion.createdAt,
   }))
 
@@ -139,66 +145,26 @@ export default async function ImportarPage() {
           <Subida cuentas={elegibles} />
         )}
 
-        {/* El feed va después de la subida y no antes: la fuente principal de
-            este producto sigue siendo el fichero, y esto es una segunda vía
+        {/* Los feeds van después de la subida y no antes: la fuente principal
+            de este producto sigue siendo el fichero, y esto es una segunda vía
             —hoy con datos simulados— que no puede robarle el sitio.
 
-            Y va dentro de un Suspense porque leer el catálogo es una llamada a
-            un servidor de terceros que tarda más de un segundo en frío. Sin
-            esta frontera, subir un extracto —que no tiene nada que ver con
-            esto— esperaría a que conteste un agregador alemán. */}
+            Plaid no necesita Suspense porque su catálogo no sale de ninguna
+            red: son seis instituciones comprobadas y escritas a mano, ver
+            lib/plaid/catalogo.ts. */}
         {puede && (
-          <Suspense fallback={<BuscandoBancos />}>
-            <SeccionDelFeed conexiones={conexiones} />
-          </Suspense>
+          <ConectarPlaid
+            instituciones={INSTITUCIONES_DE_PRUEBA}
+            conexiones={conexionesPlaid}
+            hayCredenciales={hayCredenciales()}
+            faltan={faltanCredenciales()}
+            esSandbox={esSandbox()}
+          />
         )}
 
         <Historial lotes={data.lotes} nombres={nombres} puede={puede} />
       </div>
     </>
-  )
-}
-
-/* ── El feed del agregador ───────────────────────────────────────────────── */
-
-/**
- * La sección de conectar un banco, con el catálogo ya resuelto.
- *
- * Es un componente aparte para poder suspenderla sola. `catalogoDePrueba` no
- * lanza nunca —devuelve el fallo como dato— así que un finAPI caído deja esta
- * sección explicando por qué y el resto de la pantalla intacto.
- *
- * Del banco sólo cruza a cliente lo que la pantalla enseña: `listarBancosDePrueba`
- * devuelve además BIC y BLZ, y mandarle al navegador cien objetos completos
- * para usar tres campos no lo pide nadie.
- */
-async function SeccionDelFeed({ conexiones }: { conexiones: readonly ConexionAbierta[] }) {
-  const catalogo = await catalogoDePrueba()
-  const vista: CatalogoVista =
-    catalogo.kind !== 'ok'
-      ? catalogo
-      : {
-          kind: 'ok',
-          bancos: catalogo.bancos.map((banco) => ({
-            id: banco.id,
-            nombre: banco.nombre,
-            interfaces: banco.interfaces,
-            pais: banco.pais,
-          })),
-        }
-  return <ConectarBanco catalogo={vista} conexiones={conexiones} />
-}
-
-function BuscandoBancos() {
-  return (
-    <section className="panel">
-      <div className="panel-head">
-        <div>
-          <h2>Conectar un banco</h2>
-          <p className="small faint">Buscando los bancos de prueba de finAPI…</p>
-        </div>
-      </div>
-    </section>
   )
 }
 

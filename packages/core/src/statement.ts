@@ -16,13 +16,31 @@ import type { Money } from './money.js'
 import type { PlainDate } from './plain-date.js'
 
 /**
- * 'finapi' no es un formato de fichero: es un feed de agregador. Está en la
- * misma lista a propósito, porque para el motor la diferencia no existe —
- * entra por `ParsedStatement` igual que un OFX y se persiste con el mismo
+ * 'finapi' sigue en la lista aunque su código se haya eliminado, y es
+ * deliberado: hay lotes ya guardados con ese formato, y quitarlo dejaría el
+ * historial de importaciones sin poder decir de dónde salió cada uno. Un valor
+ * de enum es barato; reescribir historia que alguien ya vio, no.
+ *
+ * 'finapi' y 'plaid' no son formatos de fichero: son feeds de agregador. Están
+ * en la misma lista a propósito, porque para el motor la diferencia no existe —
+ * entran por `ParsedStatement` igual que un OFX y se persisten con el mismo
  * `persistImport`. Lo que cambia es el origen (`data_source = 'api'`), no el
  * camino.
+ *
+ * Que el proveedor quede escrito en el lote no es decorativo: cada uno tiene su
+ * propio convenio de signo y su propia idea de qué es una fecha, así que es el
+ * dato que dice cómo hay que leer el `raw` de esas filas dentro de seis meses.
  */
-export type StatementFormat = 'ofx' | 'qfx' | 'qif' | 'csv' | 'n43' | 'camt053' | 'pdf' | 'finapi'
+export type StatementFormat =
+  | 'ofx'
+  | 'qfx'
+  | 'qif'
+  | 'csv'
+  | 'n43'
+  | 'camt053'
+  | 'pdf'
+  | 'finapi'
+  | 'plaid'
 
 export type WarningSeverity = 'info' | 'warning' | 'error'
 

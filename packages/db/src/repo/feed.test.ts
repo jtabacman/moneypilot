@@ -21,9 +21,11 @@ import {
   listFeedAccounts,
   markFeedAccountSynced,
   readConnection,
+  readConnectionSecret,
   readFeedUser,
   recordConnection,
   saveFeedUser,
+  saveSyncCursor,
   updateConnection,
 } from './feed.js'
 
@@ -205,6 +207,94 @@ suite('cableado del feed de agregador', () => {
     await expect(
       enHogar((client) => updateConnection(client, { id: conexion.id, status: 'ABORTED' }), vecino),
     ).rejects.toThrow(/no existe en este hogar/)
+  })
+
+  /* ── Lo que Plaid necesita y finAPI no ─────────────────────────────────── */
+
+  const conexionDePlaid = (banco: string, secreto = 'access-token-de-mentira') =>
+    enHogar((client) =>
+      recordConnection(client, {
+        provider: 'plaid',
+        bankId: 'ins_68',
+        bankName: banco,
+        // Plaid no tiene formulario web que sondear: la autenticación termina
+        // dentro de su widget y no deja nada que se pueda volver a mirar.
+        webFormId: null,
+        itemId: `item-${banco}`,
+        accessSecret: secreto,
+        status: 'CONECTADO',
+      }),
+    )
+
+  it('una conexión de Plaid no necesita formulario web y finAPI sigue necesitándolo', async () => {
+    const conexion = await conexionDePlaid('BBVA')
+    expect(conexion.webFormId).toBeNull()
+    expect(conexion.itemId).toBe('item-BBVA')
+    expect(conexion.syncCursor).toBeNull()
+
+    // Y la regla sigue viva donde sí es cierta: el check de la migración 009 es
+    // por proveedor, así que una conexión de finAPI sin formulario no entra.
+    await expect(
+      enHogar((client) =>
+        recordConnection(client, {
+          provider: 'finapi',
+          bankId: '280001',
+          bankName: 'finAPI Test Bank',
+          status: 'NOT_YET_OPENED',
+        }),
+      ),
+    ).rejects.toThrow()
+  })
+
+  it('la credencial del item no viaja en la fila de la conexión', async () => {
+    const conexion = await conexionDePlaid('CaixaBank', 'access-secreto')
+    // La fila la lee la pantalla entera. Que el token no esté dentro es lo que
+    // impide que acabe en el navegador el día que alguien añada un campo al
+    // mapeo de props.
+    expect(JSON.stringify(conexion)).not.toContain('access-secreto')
+    expect(await enHogar((client) => readConnectionSecret(client, conexion.id))).toBe(
+      'access-secreto',
+    )
+  })
+
+  it('la credencial del item no se ve desde otro hogar', async () => {
+    const conexion = await conexionDePlaid('Chase', 'access-del-vecino')
+    const vecino = await nuevoHogar('mirón-plaid')
+    expect(await enHogar((client) => readConnectionSecret(client, conexion.id), vecino)).toBeNull()
+  })
+
+  it('el cursor se guarda por conexión y la cadena vacía es "no hay cursor"', async () => {
+    const una = await conexionDePlaid('BBVA dos')
+    const otra = await conexionDePlaid('Santander')
+
+    await enHogar((client) => saveSyncCursor(client, { id: una.id, cursor: 'cursor-de-una' }))
+    expect((await enHogar((client) => readConnection(client, una.id)))?.syncCursor).toBe(
+      'cursor-de-una',
+    )
+    // Cada item lleva el suyo: guardar el de uno no puede mover el del otro,
+    // que perdería movimientos que Plaid no vuelve a mandar.
+    expect((await enHogar((client) => readConnection(client, otra.id)))?.syncCursor).toBeNull()
+
+    // La cadena vacía es lo que devuelve Plaid mientras el item no tiene nada
+    // que contar, y significa lo mismo que no tener cursor.
+    await enHogar((client) => saveSyncCursor(client, { id: una.id, cursor: '' }))
+    expect((await enHogar((client) => readConnection(client, una.id)))?.syncCursor).toBeNull()
+  })
+
+  it('el cursor de otro hogar no se puede mover', async () => {
+    const conexion = await conexionDePlaid('Chase dos')
+    const vecino = await nuevoHogar('mirón-cursor')
+    await expect(
+      enHogar((client) => saveSyncCursor(client, { id: conexion.id, cursor: 'x' }), vecino),
+    ).rejects.toThrow(/no existe en este hogar/)
+  })
+
+  it('el mismo item no se registra dos veces', async () => {
+    await conexionDePlaid('Kutxabank')
+    // Dos conexiones con el mismo item comparten cuentas: la segunda no puede
+    // crear las del libro —ya están enlazadas— y queda como una fila muerta con
+    // su botón en la pantalla.
+    await expect(conexionDePlaid('Kutxabank')).rejects.toThrow()
   })
 
   /* ── Cuentas ───────────────────────────────────────────────────────────── */

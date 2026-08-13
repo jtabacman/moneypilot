@@ -570,6 +570,232 @@ export async function updateBookedTransaction(
   }
 }
 
+/* ── Anular un asiento ────────────────────────────────────────────────────── */
+
+export interface FeedEntryRow {
+  readonly entryId: string
+  /** El identificador del proveedor, tal cual se guardó. */
+  readonly externalId: string
+  readonly bookedOn: string
+  readonly description: string
+  /** Importe de la pata que cuelga de la cuenta pedida. */
+  readonly amount: bigint
+  readonly currency: string
+  /** No null si el asiento ya está anulado. */
+  readonly reversedBy: string | null
+}
+
+/**
+ * Los asientos de una cuenta que llevan uno de esos identificadores de feed.
+ *
+ * Existe por el caso `removed` de `/transactions/sync`: el proveedor manda una
+ * lista de identificadores que retira, y hay que saber cuáles de ellos llegaron
+ * a asentarse. No sirve `existingForAccount`, que busca por período —un
+ * movimiento retirado puede ser de hace ocho meses— ni el dedup, que trabaja
+ * sobre lo que llega y no sobre lo que deja de llegar.
+ *
+ * **Sólo mira asientos de origen 'api'**, y no es una restricción de más: un
+ * identificador externo sólo significa algo dentro del feed que lo emitió. El
+ * FITID de un OFX puede coincidir con el `transaction_id` de un agregador por
+ * pura casualidad, y anular un movimiento que entró por fichero porque otro
+ * proveedor retiró un identificador parecido sería exactamente el error que no
+ * se puede detectar después.
+ */
+export async function findFeedEntries(
+  client: TenantClient,
+  accountId: string,
+  externalIds: readonly string[],
+): Promise<FeedEntryRow[]> {
+  if (!UUID_RE.test(accountId)) {
+    throw new ImportPersistError(`accountId inválido: ${JSON.stringify(accountId)}`)
+  }
+  const buscados = externalIds.filter((id) => id.trim() !== '')
+  if (buscados.length === 0) return []
+
+  const { rows } = await client.query<{
+    id: string
+    external_id: string
+    booked_on: string
+    description: string
+    amount: string
+    currency: string
+    reversed_by: string | null
+  }>(
+    // `distinct on` con orden por ordinal, igual que en `existingForAccount`: la
+    // pata de la cuenta del extracto es la 0, pero un asiento que alguien tocó a
+    // mano puede tener la suya en otro sitio.
+    `select distinct on (e.id)
+            e.id,
+            e.external_id,
+            to_char(e.booked_on, 'YYYY-MM-DD') as booked_on,
+            e.description,
+            p.amount::text as amount,
+            trim(p.currency) as currency,
+            e.reversed_by
+       from entry e
+       join posting p on p.entry_id = e.id and p.account_id = $1::uuid
+      where e.source = 'api'
+        and e.external_id = any($2::text[])
+      order by e.id, p.ordinal`,
+    [accountId, buscados],
+  )
+
+  return rows.map((row) => ({
+    entryId: row.id,
+    externalId: row.external_id,
+    bookedOn: row.booked_on,
+    description: row.description,
+    amount: BigInt(row.amount),
+    currency: row.currency,
+    reversedBy: row.reversed_by,
+  }))
+}
+
+export interface ReverseEntryInput {
+  readonly entryId: string
+  /**
+   * El lote al que pertenece la ANULACIÓN, no el del asiento anulado.
+   *
+   * Casi siempre `null`, y conviene entender por qué antes de pasar uno. El
+   * chequeo de `revertImport` se planta si algún asiento del lote está enlazado
+   * con una anulación —en cualquiera de los dos sentidos—, así que atar la
+   * anulación al lote de la sincronización que la trajo dejaría ese lote
+   * entero, con sus trescientos movimientos, imposible de deshacer de un click
+   * por culpa de un movimiento que el banco retiró.
+   */
+  readonly batchId?: string | null
+  /** Lo que se lee en el registro. Sin ella, "Anulación de: <la original>". */
+  readonly description?: string
+}
+
+export interface ReverseEntryResult {
+  readonly reversalId: string
+  /** false si ya estaba anulado: la llamada no escribió nada. */
+  readonly created: boolean
+}
+
+/**
+ * Anula un asiento con otro que lo refleja, sin borrar nada.
+ *
+ * Es la única forma de quitar del libro un hecho que ya se enseñó. El asiento
+ * original se queda donde está —con su id, sus dimensiones, su categorización
+ * hecha a mano y su sitio en cualquier informe que ya se haya emitido— y al
+ * lado aparece su espejo exacto. `entry.reversed_by` los enlaza, que es lo que
+ * después impide que `revertImport` borre uno de los dos y deje al otro
+ * moviendo el saldo solo.
+ *
+ * **El espejo es exacto, posting por posting.** No es un asiento nuevo contra
+ * la bolsa de sin categorizar: se copian las mismas cuentas con el importe
+ * negado. Si el gasto se había atribuido a 'Supermercado', la anulación
+ * descuenta de 'Supermercado'; si fuera contra la bolsa, el patrimonio quedaría
+ * bien y el informe de gasto por categoría seguiría contando una compra que no
+ * existió, además de inventar un ingreso sin categorizar que nadie hizo.
+ *
+ * **Va con la fecha del original.** Un movimiento que el banco dice que nunca
+ * ocurrió tiene que desaparecer del mes en el que se contó, no aparecer como un
+ * ingreso raro en el mes en que nos enteramos. El coste está declarado: un
+ * período que alguien ya cerró cambia de cifra, y por eso el asiento es visible
+ * en el registro en vez de ser un ajuste silencioso.
+ *
+ * Idempotente: si el asiento ya está anulado devuelve la anulación que hubiera
+ * y no escribe nada. Sin eso, dos sincronizaciones que traigan el mismo
+ * `removed` —que es lo normal si la primera falló después de anular— dejarían
+ * el saldo movido al doble.
+ */
+export async function reverseEntry(
+  client: TenantClient,
+  input: ReverseEntryInput,
+): Promise<ReverseEntryResult> {
+  if (!UUID_RE.test(input.entryId)) {
+    throw new ImportPersistError(`entryId inválido: ${JSON.stringify(input.entryId)}`)
+  }
+  if (input.batchId !== undefined && input.batchId !== null && !UUID_RE.test(input.batchId)) {
+    throw new ImportPersistError(`batchId inválido: ${JSON.stringify(input.batchId)}`)
+  }
+
+  const { rows: asientos } = await client.query<{
+    tenant_id: string
+    booked_on: string
+    valued_on: string | null
+    description: string
+    source: DataSource
+    reversed_by: string | null
+  }>(
+    `select e.tenant_id,
+            to_char(e.booked_on, 'YYYY-MM-DD') as booked_on,
+            to_char(e.valued_on, 'YYYY-MM-DD') as valued_on,
+            e.description, e.source::text as source, e.reversed_by
+       from entry e
+      where e.id = $1`,
+    [input.entryId],
+  )
+  const asiento = asientos[0]
+  if (asiento === undefined) {
+    // Con RLS, el asiento de otro hogar es indistinguible de uno inexistente.
+    throw new ImportPersistError(`El asiento ${input.entryId} no existe en este hogar.`)
+  }
+  if (asiento.reversed_by !== null) {
+    return { reversalId: asiento.reversed_by, created: false }
+  }
+
+  const { rows: patas } = await client.query<{ n: string }>(
+    'select count(*)::text as n from posting where entry_id = $1',
+    [input.entryId],
+  )
+  if (BigInt(patas[0]?.n ?? '0') === 0n) {
+    throw new ImportPersistError(
+      `El asiento ${input.entryId} no tiene ninguna pata: anularlo no movería nada y dejaría un ` +
+        'asiento vacío enlazado con otro vacío.',
+    )
+  }
+
+  const reversalId = newEntryId()
+  await client.query(
+    `insert into entry
+       (id, tenant_id, booked_on, valued_on, description, source, import_batch_id,
+        fingerprint, external_id)
+     values ($1, $2, $3::date, $4::date, $5, $6::data_source, $7, null, null)`,
+    [
+      reversalId,
+      asiento.tenant_id,
+      asiento.booked_on,
+      asiento.valued_on,
+      input.description ?? `Anulación de: ${asiento.description}`,
+      asiento.source,
+      input.batchId ?? null,
+    ],
+  )
+
+  // La huella y el identificador externo van en null a propósito, y no por
+  // ahorrar. La huella es la identidad de un movimiento que llegó de algún
+  // sitio, y una anulación no llegó de ningún sitio: dársela la volvería
+  // candidata del dedup y la próxima importación podría tomarla por el
+  // duplicado de una fila del extracto. El identificador externo, peor todavía:
+  // repetiría el del asiento anulado y el dedup de origen 'api' encontraría dos
+  // asientos para el mismo movimiento del proveedor.
+
+  // La copia se hace en SQL y no marshalling en JS: los importes son bigint y
+  // la conversión congelada a moneda de reporte tiene cinco columnas que
+  // tendrían que viajar de ida y vuelta sin equivocarse ni una. `-null` es
+  // null, así que las cuentas sin conversión se copian solas.
+  await client.query(
+    `insert into posting
+       (tenant_id, entry_id, account_id, ordinal, amount, currency,
+        native_amount, native_currency, base_amount, base_currency,
+        fx_numerator, fx_denominator, fx_as_of, fx_source, memo, is_transfer)
+     select p.tenant_id, $2::uuid, p.account_id, p.ordinal, -p.amount, p.currency,
+            -p.native_amount, p.native_currency, -p.base_amount, p.base_currency,
+            p.fx_numerator, p.fx_denominator, p.fx_as_of, p.fx_source, p.memo, p.is_transfer
+       from posting p
+      where p.entry_id = $1`,
+    [input.entryId, reversalId],
+  )
+
+  await client.query('update entry set reversed_by = $2 where id = $1', [input.entryId, reversalId])
+
+  return { reversalId, created: true }
+}
+
 /* ── Saldo de apertura ────────────────────────────────────────────────────── */
 
 /**

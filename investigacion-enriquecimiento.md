@@ -329,3 +329,168 @@ Cuántos comercios españoles cubren "en total". Ese número no significa nada. 
 4. **El MCC no está en nuestro dato** y no lo va a estar mientras no emitamos tarjeta. La tabla, por si acaso, ya está descargada y es de dominio público.
 5. **El residuo que no resolvemos no son comercios**: son impuestos, traspasos propios, flujos financieros y obra. Comprar enriquecimiento compra, como mucho, una cuarta parte del hueco.
 6. **Seguimos con el motor propio** — y con un corpus español real como la tarea más valiosa de la semana, porque sin él ninguna de estas decisiones se puede volver a tomar mejor.
+
+---
+
+## 11. Plaid mide el enriquecimiento sobre descriptores españoles
+
+**Fecha:** 13 de agosto de 2026 (pasada posterior a las secciones 1–10 del mismo día)
+**Pregunta que contesta:** las secciones anteriores se quedaron sin el número que decide, porque los dos candidatos que hacían el trabajo estaban detrás de un formulario de alta. Plaid no: las credenciales del sandbox ya están, y Plaid **trae su propio enriquecimiento incluido** (`merchant_name`, `counterparties`, `personal_finance_category`). Así que la pregunta es directa: **con Plaid como agregador, ¿hace falta comprar enriquecimiento aparte, o el motor propio alcanza?**
+**Método:** medición contra el sandbox de Plaid, reproducible con los scripts del scratchpad (`medir-enriquecimiento.mjs`, `revision-a-ojo.mjs`, `descriptores-es.mjs`). Todas las llamadas HTTP, del 13-08-2026.
+
+### 11.0 Veredicto
+
+**No hace falta comprar enriquecimiento de comercios. Y no porque Plaid lo resuelva —resuelve 11 de 25— sino porque hace bien lo único que un comprador externo hacía mal: no inventa.**
+
+- **La vía se abrió.** `/transactions/enrich` sigue rechazando descripciones libres en sandbox, pero el **usuario de sandbox a medida** deja meter nuestras propias transacciones y leerlas ya pasadas por el motor de Plaid. Medido de verdad, no leído `[V]`.
+- **Categoría: 40/40 en español y 58/58 en alemán.** Plaid siempre pone una `personal_finance_category` `[V]`. Cobertura del 100%, que es justo lo que finAPI daba (96%) y lo que el motor propio no necesita comprar.
+- **Comercio: 11/40 en español (27,5%)** `[V]`. Sobre los 25 descriptores que **sí** deberían llevar comercio, acierta **11 (44%)**.
+- **El número que importa, revisado a ojo: de una muestra de 25, 19 están BIEN**, 1 casi y 5 mal `[V]`. Sobre los 40 completos: **31 bien, 2 casi, 7 mal (77,5%)**.
+- **Y el hallazgo que cambia la conversación: de los 15 movimientos que NO debían llevar comercio —impuestos, traspasos propios, hipoteca, Bizum, cajero, comunidad— Plaid inventó CERO** `[V]`. En alemán, cero sobre 13. **Veintiocho oportunidades de equivocarse y ninguna aprovechada.** Es exactamente el contrario del resultado de name-suggestion-index en §3.4, que inventaba doce comercios justo en esas filas. `PAGO TARJETA CREDITO BBVA` lo resuelve poniendo BBVA como `financial_institution`, **no** como comercio: la distinción que nos importaba, hecha por ellos.
+- **El español no sale peor que el alemán. Sale mejor:** 77,5% bien contra 70,7% del corpus alemán de control `[V]`. La hipótesis de "Plaid es un producto estadounidense y en España se cae" **no se sostiene con este dato**.
+
+**Decisión que sugiere la medición: seguir con el motor propio y usar la `personal_finance_category` de Plaid como señal de entrada, no como veredicto.** No se compra nada. El detalle está en §11.6.
+
+### 11.1 Cómo se midió (la vía que sí funciona)
+
+`/transactions/enrich` no sirve en sandbox. Comprobado hoy con un descriptor español `[V]`:
+
+```
+POST /transactions/enrich   {"description":"RECIBO IBERDROLA CLIENTES SAU", ...}
+400  INVALID_SANDBOX_TRANSACTION — "description must match a preset transaction"
+```
+
+La vía que sí funciona es el **usuario de sandbox a medida**: `/sandbox/public_token/create` con `options.override_username = "user_custom"` y `options.override_password` = el JSON de configuración. Se le dan a Plaid nuestras propias cuentas y movimientos, se canjea el token y se leen por `/transactions/sync` **ya enriquecidos por su motor** `[V]`.
+
+Lo decisivo del método: **la configuración sólo admite `date_transacted`, `date_posted`, `amount`, `description` y `currency`.** No hay forma de pasarle el comercio ni la categoría. Todo lo que devuelve en `merchant_name`, `counterparties` y `personal_finance_category` **lo pone Plaid** `[V]`. La medición no puede ser circular por construcción.
+
+Se usó **`ins_76` (CaixaBank)** como entidad, no un banco estadounidense: si el motor mira la institución o el país para desambiguar, que lo haga a nuestro favor `[V]`.
+
+Tres cautelas de método, y las tres importan:
+
+1. **La primera pasada midió mal y se detectó a tiempo.** `/transactions/sync` devolvió `HISTORICAL_UPDATE_COMPLETE` con `has_more: false` cuando todavía faltaban movimientos: **7 de 40**, justo los siete días más recientes. Un porcentaje calculado ahí habría estado inflado sobre un denominador roto. Se arregló sondeando hasta que varias vueltas seguidas no traen nada, y **contrastando con `/transactions/get` sobre todo el rango**. Los dos endpoints coinciden en 40, 58 y 58 `[V]`. *Si alguien reusa este script, el bug está en el estado de sync, no en el cursor.*
+2. **Es determinista.** El corpus español se midió dos veces completas y las 40 filas coinciden en comercio y categoría `[V]`. Los números no son una tirada de dados.
+3. **Los 40 descriptores españoles los construí yo**, con la forma de un extracto español pero sin ser uno. `[I]` Es la misma limitación que ya tiene el corpus `seed` de la base (§3.1) y **no se cierra hasta que haya extractos españoles reales**. El corpus alemán, en cambio, es el que ya está en la base (hogar `aaaa1111…`, formato `finapi`, 58 descriptores distintos) — pero es la demo de finAPI, con la misma sospecha de §3.1.
+
+### 11.2 Cobertura, en crudo
+
+| | español (40, construidos) | alemán (58, los de la base) |
+|---|---|---|
+| `personal_finance_category` asignada | **40/40 (100%)** | **58/58 (100%)** |
+| …con hoja poco informativa (`*_OTHER_*`) | 4 (10%) | 8 (13,8%) |
+| `merchant_name` asignado | **11/40 (27,5%)** | **11/58 (19,0%)** |
+| …sobre los que **sí** debían llevar comercio | **11/25 (44%)** | 11/45 (24,4%) |
+| …**comercios inventados** donde no debía haberlos | **0 de 15** | **0 de 13** |
+| `merchant_entity_id` / `website` / `logo_url` | 4/40 (10%) | 8/58 (13,8%) |
+| `merchant_category_code` (MCC) | **0/40** | **0/58** |
+| ramas primarias distintas usadas | 9 | 12 |
+
+Tres lecturas que no se ven en la tabla:
+
+- **El MCC sigue sin existir, ahora confirmado en un segundo proveedor.** Cero en 156 movimientos `[V]`. La §4 daba esto por cerrado con finAPI; Plaid lo cierra otra vez. El MCC viaja por la red de tarjetas y no llega al extracto, y punto.
+- **`merchant_name` sin marca:** de los 11 comercios españoles resueltos, **sólo 4 traen logo y web** (Carrefour, Lidl, Vodafone, Amazon). Los otros siete —Mercadona, Alcampo, Orange, Renfe, Cabify, CEPSA, El Corte Inglés— son **nombre y nada más** `[V]`. Si el diseño contaba con el logo del comercio en la ficha del movimiento, el dato llega en el 10% de los casos, no en el 27,5%.
+- **La categoría heredada (`category`, la de dos niveles) es basura y no hay que tocarla.** `RECIBO IBI AYUNTAMIENTO DE MADRID` sale como `["Shops","Clothing and Accessories"]`, y `ADEUDO TASA RESIDUOS URBANOS` como `["Food and Drink","Restaurants"]`, mientras la `personal_finance_category` de la misma fila acierta `[V]`. Está deprecada y se nota. **Usar sólo `personal_finance_category`.**
+
+### 11.3 La confianza: el campo que pedía el encargo y que el sandbox no da
+
+Se pidió medir la categoría **"y con qué confianza"**. La respuesta honesta:
+
+**`personal_finance_category.confidence_level` vale `UNKNOWN` en los 156 movimientos de las tres corridas** `[V]`. No hay un solo `HIGH`, `MEDIUM` ni `LOW`. **En sandbox ese campo no se puede medir**, y cualquier número que se publicara sobre él estaría inventado. `[?]` Sólo se cierra en producción o preguntándoles.
+
+El otro campo de confianza, el de `counterparties[].confidence_level`, **sí viene relleno — y es inútil como filtro**: vale `VERY_HIGH` en las 12 contrapartes españolas y en las 11 alemanas, **el 100%** `[V]`. No hay gradación: cuando Plaid encuentra un comercio, siempre dice estar segurísimo. Eso significa que **no se puede usar la confianza para decidir qué mandar a revisión manual**. Lo bueno es que, en este corpus, esa seguridad estaba justificada: cero falsos positivos.
+
+### 11.4 Los 25 revisados a ojo
+
+Criterio, el mismo para los dos corpus: **BIEN** = sirve tal cual en el informe de un cliente (categoría correcta, y comercio bien puesto **o bien ausente**); **CASI** = rama principal correcta, hoja imprecisa; **MAL** = es otra cosa, o se queda sin resolver.
+
+| | BIEN | CASI | MAL |
+|---|---|---|---|
+| **Muestra de 25 españoles** (es01–es25) | **19** | 1 | 5 |
+| Los 40 españoles completos | **31 (77,5%)** | 2 | 7 |
+| Los 58 alemanes de control | **41 (70,7%)** | 4 | 13 |
+
+Los veredictos están escritos uno a uno en `revision-a-ojo.mjs`, con el motivo de cada fallo, para que se puedan discutir de a uno y no en bloque.
+
+**Dónde se equivoca en español, con el descriptor y lo que puso** `[V]`:
+
+| Descriptor | Puso | Por qué está mal |
+|---|---|---|
+| `COMPRA TARJ. 1234 DIA RETAIL ESPANA SAU` | `GENERAL_MERCHANDISE_OTHER`, sin comercio | DIA es una cadena de supermercados presente en toda España |
+| `RECIBO IBERDROLA CLIENTES SAU` | `GENERAL_SERVICES_OTHER`, sin comercio | **La mayor eléctrica española.** Y sí acierta Endesa y Naturgy en las filas de al lado |
+| `ADEUDO AMPA CEIP CERVANTES CUOTA ANUAL` | `GENERAL_SERVICES_INSURANCE` | La cuota del AMPA de un colegio no es un seguro |
+| `TRANSFERENCIA UNIVERSIDAD COMPLUTENSE MATRICULA` | `TRANSFER_OUT_ACCOUNT_TRANSFER` | Leyó "TRANSFERENCIA" y paró. Una matrícula es educación |
+| `REPSOL E.S. 12345 MADRID COMPRA TARJ` | `GENERAL_MERCHANDISE_OTHER`, sin comercio | **La mayor red de gasolineras de España.** Acierta CEPSA y Galp al lado |
+| `BIZUM DE MARIA GARCIA LOPEZ` | `OTHER_OTHER` | Bizum recibido: se queda sin resolver |
+| `BIZUM A JUAN PEREZ CENA DEL SABADO` | `FOOD_AND_DRINK_RESTAURANT` | **El error peligroso:** es un envío a una persona, y el motor se quedó con la palabra "CENA" del concepto |
+| `RECIBO IBI AYUNTAMIENTO DE MADRID` *(casi)* | `GOVERNMENT_DEPARTMENTS_AND_AGENCIES` | Rama correcta; la hoja debería ser `TAX_PAYMENT` |
+| `TRANSFERENCIA COMUNIDAD PROPIETARIOS` *(casi)* | `TRANSFER_OUT_ACCOUNT_TRANSFER` | Mecánicamente es una transferencia; económicamente es gasto de vivienda |
+
+**El patrón de los fallos es más útil que la lista:** Iberdrola, Repsol y DIA no fallan por ser españoles —Vodafone, Orange, Renfe, Cabify, CEPSA, Mercadona, Alcampo y El Corte Inglés salen bien—, fallan por ser **las marcas grandes que un diccionario propio de veinte líneas resuelve el primer día**. Es el hueco más barato de tapar que existe.
+
+**Y los correctamente "sin comercio", que se cuentan aparte de los fallos** `[V]` — 15 de 15, ni uno inventado:
+
+| Descriptor | Categoría, sin comercio |
+|---|---|
+| `ADEUDO AEAT IRPF MOD 130 TRIMESTRAL` | `GOVERNMENT_AND_NON_PROFIT_TAX_PAYMENT` |
+| `IMPUESTO VEHICULOS TRACCION MECANICA AYTO` | `GOVERNMENT_AND_NON_PROFIT_TAX_PAYMENT` |
+| `RECIBO IBI AYUNTAMIENTO DE MADRID` | `GOVERNMENT_DEPARTMENTS_AND_AGENCIES` |
+| `ADEUDO SEGURIDAD SOCIAL RETA AUTONOMOS` | `GOVERNMENT_DEPARTMENTS_AND_AGENCIES` |
+| `ADEUDO TASA RESIDUOS URBANOS AYUNTAMIENTO` | `RENT_AND_UTILITIES_SEWAGE_AND_WASTE_MANAGEMENT` |
+| `TRASPASO A CUENTA PROPIA ES91 2100 0418 45` | `TRANSFER_OUT_ACCOUNT_TRANSFER` |
+| `TRANSFERENCIA A MI CUENTA AHORRO OPENBANK` | `TRANSFER_OUT_ACCOUNT_TRANSFER` — **no inventó "Openbank"** |
+| `PAGO TARJETA CREDITO BBVA LIQUIDACION MENSUAL` | `LOAN_PAYMENTS_CREDIT_CARD_PAYMENT` — **BBVA como `financial_institution`, no como comercio** |
+| `REINTEGRO CAJERO 4B OFICINA 1234` | `TRANSFER_OUT_WITHDRAWAL` |
+| `AMORTIZACION PRESTAMO HIPOTECARIO 0182 4567` | `LOAN_PAYMENTS_MORTGAGE_PAYMENT` |
+| `BIZUM ENVIADO A ANA MARTINEZ REGALO` | `TRANSFER_OUT_ACCOUNT_TRANSFER` |
+| `TRANSFERENCIA COMUNIDAD PROPIETARIOS` | `TRANSFER_OUT_ACCOUNT_TRANSFER` |
+| `ADEUDO AMPA CEIP CERVANTES` | (categoría mal, pero sin comercio: correcto) |
+| `BIZUM DE MARIA GARCIA LOPEZ` | (sin resolver, pero sin comercio: correcto) |
+| `BIZUM A JUAN PEREZ CENA DEL SABADO` | (categoría mal, pero sin comercio: correcto) |
+
+### 11.5 El grupo de control alemán, y dos cosas que salieron de él
+
+Sobre los 58 descriptores reales de la base: **41 bien, 4 casi, 13 mal (70,7%)** `[V]`. Los fallos son del mismo tipo que en español y algunos son llamativos: `Hornbach` (bricolaje) → **supermercado**; `Aral` y `SB-Tank` (gasolineras) → **restaurante** y **ferretería**; `Tengelmann` (supermercado) → **bricolaje**; y las tres nóminas y el dividendo clasificados como traspasos o servicios en vez de **ingresos**, que para un CFO personal es el error caro.
+
+Contra finAPI sobre este mismo corpus: finAPI categorizaba 47/49 contrapartes (§3.2) y **0 comercios**; Plaid categoriza 58/58 y **11 comercios**. La comparación de *acierto* no es cara a cara —la revisión a ojo de finAPI fue sobre 15 descriptores y ésta sobre 58— así que se deja como indicativa `[I]`. Lo que sí es directo: **Plaid da comercios donde finAPI daba cero, y da la categoría igual de siempre.** Y resuelve `Winzergenossenschaft Nordheim` (cooperativa vinícola → `BEER_WINE_AND_LIQUOR`), que era uno de los dos que finAPI no resolvía.
+
+Dos hallazgos que no se buscaban y afectan a código nuestro:
+
+- **El separador `·` de nuestro mapeador degrada el enriquecimiento de terceros.** Se midió el corpus alemán dos veces, con `·` y sustituyéndolo por un espacio: **6 de 58 filas cambian de resultado, y en 5 el cambio es a mejor** (la sexta pasa de un error a otro) `[V]`. Los tres `Max Mustermann · Sparen` (traspasos a ahorro) pasan de **`CLOTHING_AND_ACCESSORIES`** y **`HAIR_AND_BEAUTY`** a `TRANSFER_OUT_ACCOUNT_TRANSFER`, y `Tengelmann` pasa de bricolaje a **supermercado**, que es lo correcto. El `·` lo pone `packages/importers/src/finapi/map.ts` para unir contraparte y concepto y **no sale de ningún banco**. *Acción concreta: cuando se mande un descriptor a un enriquecedor externo, mandar el texto sin el separador.*
+- **Plaid rompe los acentos en su propia base de comercios.** Para `PAGO EN EL CORTE INGLES SA MADRID` devuelve `merchant_name` = **`"El Corte Ingl?s"`** — un signo de interrogación ASCII literal, U+003F, verificado por punto de código `[V]`. No es nuestra codificación: nosotros mandamos el descriptor sin tildes y el `?` viene en su respuesta. Para un producto español esto no es cosmético: **si se muestra `merchant_name` tal cual, el cliente ve el nombre roto**. Hay que normalizar a la salida. (En la misma línea, el `Aldi` alemán viene con `website: aldi.us` — la resolución de entidades tira a Estados Unidos.)
+
+### 11.6 Qué significa esto para la decisión
+
+**Sobre comprar enriquecimiento de comercios: la respuesta se mantiene en NO, y ahora con el número que faltaba.**
+
+El argumento de §0 —"el hueco que dejamos abierto no es de comercios"— **queda confirmado desde el otro lado**. De los 40 descriptores españoles, **15 no deben llevar comercio**: impuestos, traspasos propios, hipoteca, tarjeta, cajero, comunidad y Bizum. Eso es el **37,5% del corpus** donde un enriquecedor de comercios, por definición, no tiene nada que vender. Comprar resolución de marca para ese 37,5% no es caro: es **contraproducente**, y §3.4 ya mostró a NSI haciendo exactamente ese daño.
+
+Lo que Plaid aporta gratis, incluido en la agregación que de todos modos vamos a contratar:
+
+1. **Categoría en el 100% de los movimientos**, con un 77,5% de acierto a ojo en español. Como **señal de entrada** del motor propio —una columna más, junto al `concepto_comun` de la Norma 43 y las reglas del hogar— es un punto de partida mucho mejor que el vacío.
+2. **Comercio en el 44% de los que lo tienen**, sin un solo falso positivo en 28 oportunidades. Es la propiedad que ningún candidato de §2 pudo demostrar.
+3. **La distinción comercio / entidad financiera hecha por ellos** (`counterparties[].type`), que es justo la que hacía falta para no ensuciar traspasos y pagos de tarjeta.
+
+**Lo que NO hay que hacer con esto** `[I]`:
+
+- **No usar `personal_finance_category` como veredicto.** Un 22,5% de error, con un `confidence_level` que no se puede leer y una confianza de contraparte que siempre dice `VERY_HIGH`, no se publica en el informe de un cliente sin pasar por el motor propio y por las reglas del hogar.
+- **No mostrar `merchant_name` sin normalizar**, por lo de los acentos.
+- **No tirar el motor propio para la capa estructural.** Los tres errores más caros del corpus —matrícula universitaria como traspaso, Bizum a una persona como restaurante, nóminas alemanas como servicios— son de **estructura**, y la estructura es exactamente lo que el motor propio resuelve bien (92,9% de categoría en español, §3.6) con señal de Norma 43 y memoria del hogar.
+
+**El trabajo barato que sale de acá, por orden de rendimiento** `[I]`:
+
+1. **Veinte marcas españolas al diccionario propio.** Iberdrola, Repsol y DIA son tres de los cinco fallos de la muestra, y son las tres marcas más obvias del país. Una tarde de datos vale más que cualquier suscripción de §2.
+2. **Regla de Bizum por estructura, no por texto.** `BIZUM` en el descriptor ⇒ P2P, e ignorar el concepto libre. Mata el falso `RESTAURANT` y el `OTHER_OTHER` de un golpe.
+3. **Quitar el `·` antes de mandar texto a cualquier enriquecedor externo.**
+4. **Normalizar `merchant_name` a la entrada** (el `Ingl?s`).
+
+### 11.7 Qué quedó sin verificar en esta sección
+
+| Afirmación | Estado | Cómo se cierra |
+|---|---|---|
+| Que estos 40 descriptores se parezcan a un extracto español real | `[I]` **los construí yo** | Sigue siendo la tarea más valiosa: un extracto español de verdad |
+| `personal_finance_category.confidence_level` en producción | `[?]` — `UNKNOWN` en 156/156 en sandbox | Medir en producción, o preguntarles |
+| Que el enriquecimiento de sandbox sea el mismo motor que el de producción | `[?]` **no verificado, y condiciona todos los números de arriba** | Preguntar a Plaid, o comparar contra un Item real |
+| Que el corpus alemán represente descriptores bancarios reales | `[?]` — heredado de §3.1 | Es la demo de finAPI; sólo se cierra con extractos reales |
+| Acierto de Plaid contra Triqai / Context.dev sobre el mismo corpus | `[?]` | Los 40 descriptores ya están en `descriptores-es.mjs`: el día que haya clave, se corre igual |
+
+**La pregunta abierta más incómoda es la tercera**, y conviene decirla fuerte: **no está verificado que el motor de enriquecimiento del sandbox sea el de producción.** Si en producción fuera mejor, estos números son un suelo; si fuera peor, son un techo. No se puede saber desde acá `[?]`. Todo lo de arriba se lee con esa condición encima.
