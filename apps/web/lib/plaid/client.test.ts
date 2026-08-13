@@ -667,3 +667,26 @@ describe('operaciones de sandbox', () => {
     })
   })
 })
+
+describe('el histórico que se pide', () => {
+  it('pide 730 días aunque nadie lo diga, porque después no se puede ampliar', async () => {
+    // Plaid pide 90 si no se dice nada, y el histórico de un Item no se puede
+    // ensanchar sin borrarlo y hacer que el cliente vuelva a autenticarse en su
+    // banco. Este test existe para que quitar el defecto rompa algo: el
+    // parámetro estuvo cableado y sin usar, y así conectaríamos con 90.
+    responder({
+      cuerpo: JSON.stringify({
+        added: [],
+        modified: [],
+        removed: [],
+        next_cursor: 'c',
+        has_more: false,
+      }),
+    })
+
+    await sincronizar('access-sandbox-x')
+
+    const opciones = llamadas[0]?.cuerpo['options'] as { days_requested?: number } | undefined
+    expect(opciones?.days_requested).toBe(730)
+  })
+})

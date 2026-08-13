@@ -416,12 +416,29 @@ function leerCuentas(json: ObjetoJson): CuentaPlaid[] {
 
 // ── Movimientos ─────────────────────────────────────────────────────────────
 
+/**
+ * El máximo que admite Plaid. Es el defecto a propósito: la promesa del
+ * producto es "importamos 24 meses sin que pierdas nada", y 730 días es
+ * exactamente eso.
+ */
+export const DIAS_DE_HISTORICO_POR_DEFECTO = 730
+
 export interface OpcionesSincronizar extends OpcionesRed {
   /** Movimientos por vuelta. Plaid admite hasta 500, que es el defecto. */
   readonly porVuelta?: number
   /** Filtra a una sola cuenta del item. */
   readonly accountId?: string
-  /** Días de histórico que se piden en la carga inicial. Plaid admite 1..730. */
+  /**
+   * Días de histórico de la carga inicial. Por defecto **730**, el máximo.
+   *
+   * Es opcional en la firma pero no en la práctica, y el defecto es lo que
+   * importa: Plaid pide 90 si no se dice nada, y **el histórico no se puede
+   * ampliar después sin borrar el Item y volver a vincularlo** — o sea,
+   * haciendo que el cliente pase otra vez por la autenticación de su banco.
+   * Un parámetro que hay que acordarse de poner es un parámetro que un día
+   * no se pone, y ese día el cliente que venía a cargar dos años de histórico
+   * carga tres meses.
+   */
   readonly diasDeHistorico?: number
   /** Pide también el concepto crudo del banco, sin limpiar. */
   readonly incluirDescripcionOriginal?: boolean
@@ -472,9 +489,9 @@ export async function sincronizar(
 ): Promise<LoteDeSincronizacion> {
   const opcionesPlaid: Record<string, unknown> = {}
   if (opciones.accountId !== undefined) opcionesPlaid['account_id'] = opciones.accountId
-  if (opciones.diasDeHistorico !== undefined) {
-    opcionesPlaid['days_requested'] = opciones.diasDeHistorico
-  }
+  // Siempre se manda, y por defecto el máximo. Ver la nota en el tipo: pedir
+  // de menos acá no se puede corregir más tarde.
+  opcionesPlaid['days_requested'] = opciones.diasDeHistorico ?? DIAS_DE_HISTORICO_POR_DEFECTO
   if (opciones.incluirDescripcionOriginal === true) {
     opcionesPlaid['include_original_description'] = true
   }
