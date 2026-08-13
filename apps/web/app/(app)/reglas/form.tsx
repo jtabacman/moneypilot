@@ -297,8 +297,8 @@ export function FormularioRegla({
             <span>Activa</span>
           </span>
           <span className="small faint">
-            Desactivada no entra en la pasada automática de cada importación, pero se puede aplicar
-            a mano desde acá.
+            Desactivada quedará fuera de la pasada automática sobre cada importación cuando ésa
+            exista —todavía no está construida—, pero se puede aplicar a mano desde acá.
           </span>
         </label>
       </div>

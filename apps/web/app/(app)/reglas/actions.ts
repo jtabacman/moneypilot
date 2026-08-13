@@ -198,8 +198,9 @@ async function guardar(
         return {
           estado: hecho(
             `«${regla.name}» ${reglaId === '' ? 'creada' : 'guardada'}. Todavía no tocó ningún ` +
-              'movimiento: se aplicará sola a lo que entre de acá en adelante, y sobre lo que ya ' +
-              'está sólo si pulsás «Guardar y aplicar».',
+              'movimiento, y no lo va a tocar solo: para que alcance a lo que ya está registrado ' +
+              'hay que pulsar «Guardar y aplicar». La pasada automática sobre cada importación ' +
+              'nueva está prevista y todavía no está construida.',
             regla.id,
           ),
           aplicado: false,

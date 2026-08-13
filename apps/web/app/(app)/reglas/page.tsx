@@ -79,9 +79,11 @@ export default async function ReglasPage() {
         {/* Las dos líneas que evitan la pregunta de siempre. */}
         <p className="lede">
           Cambiar la categoría de un movimiento arregla ese movimiento;{' '}
-          <b>una regla arregla también todos los que vengan después</b>, porque se aplica sola en
-          cada importación. Por eso una regla se mira antes de aplicarla: alcanza a lo que ya está
-          registrado, y eso puede ser trabajo que alguien hizo a mano.
+          <b>una regla arregla de una vez todos los que se le parecen</b>, los de hoy y los de hace
+          dos años. Por eso una regla se mira antes de aplicarla: alcanza a lo que ya está
+          registrado, y eso puede ser trabajo que alguien hizo a mano. Que además corra sola sobre
+          cada importación nueva está previsto —para eso una regla se puede parar— pero{' '}
+          <b>todavía no está construido</b>: hoy la pasada se lanza a mano desde la regla.
         </p>
 
         <div className="panel">
@@ -192,8 +194,8 @@ export default async function ReglasPage() {
               }
             >
               Una regla mira la descripción de cada movimiento y lo manda a una categoría, con sus
-              dimensiones. Se aplica sobre lo que ya está registrado —después de enseñarte a cuántos
-              alcanza— y sola sobre cada importación nueva.
+              dimensiones. Se aplica sobre lo que ya está registrado, y siempre después de enseñarte
+              a cuántos alcanza.
             </Empty>
           ) : (
             <div className="scroll">
@@ -292,8 +294,10 @@ export default async function ReglasPage() {
                 alcance. Por eso el orden de esta tabla es el orden en que se aplican.
               </li>
               <li>
-                Una regla <b>parada</b> no entra en la pasada automática de cada importación, pero
-                se puede aplicar a mano. Lo que ya clasificó se queda como está.
+                Una regla <b>parada</b> quedará fuera de la pasada automática sobre cada importación
+                cuando ésa exista; aplicarla a mano desde su pantalla se puede igual, porque es un
+                acto explícito de alguien que la está mirando. Lo que ya clasificó se queda como
+                está.
               </li>
               <li>
                 El enlace al registro marcado con <span className="faint">≈</span> lleva a un
