@@ -2,11 +2,17 @@
  * La traducción entre el informe que se le enseña al cliente y lo que entra al
  * libro.
  *
- * Vive al lado de la ruta y no en `lib/` a propósito: no es una pieza
- * reutilizable, es el pegamento entre dos contratos que ya existen —el
- * resultado de `runPipeline` y la entrada de `persistImport`—. El día que haya
- * una segunda superficie que persista importaciones, lo que se comparte es el
- * paquete entero, no medio módulo de la web.
+ * Vivía al lado de `/api/importar` porque era el pegamento de una sola ruta.
+ * Ese día llegó: el feed del agregador es una segunda superficie que persiste
+ * importaciones, y necesita exactamente lo mismo —qué hay ya en el libro
+ * contra qué deduplicar, cómo se traduce el resultado del pipeline a la
+ * entrada de `persistImport`, y cómo se le pone nombre a la cuenta en el
+ * informe—. Copiarlo habría sido peor que moverlo: de dos copias, la que se
+ * queda sin actualizar escribe lotes que no deduplican contra lo que debería.
+ *
+ * Sigue siendo pegamento entre dos contratos que ya existen y no una capa
+ * nueva. Lo que decide qué se importa está en el pipeline; lo que decide qué
+ * se escribe, en el repositorio.
  *
  * Dos decisiones de acá gobiernan que reimportar funcione:
  *
@@ -34,13 +40,14 @@ import {
   type TransactionRef,
 } from '@moneypilot/core'
 import type {
+  DataSource,
   DeclaredBalanceInput,
   NeedsReviewTransaction,
   PersistableTransaction,
   PersistImportInput,
   TenantClient,
 } from '@moneypilot/db'
-import type { PipelineResult, WireReport } from '@/lib/pipeline'
+import type { PipelineResult, WireReport } from './pipeline'
 
 /** Hash del contenido, que es lo que hace idempotente reimportar el fichero. */
 export function contentHash(bytes: Uint8Array): string {
@@ -68,6 +75,7 @@ interface FilaExistente {
   readonly external_id: string | null
   readonly amount: string
   readonly currency: string
+  readonly source: DataSource
 }
 
 /**
@@ -98,7 +106,13 @@ export async function existingForAccount(
             trim(e.fingerprint) as fingerprint,
             e.external_id,
             p.amount::text as amount,
-            trim(p.currency) as currency
+            trim(p.currency) as currency,
+            -- El origen del asiento ya guardado. Sin él, el dedup no puede
+            -- distinguir "esta huella coincide con algo que entró por fichero"
+            -- —el mismo movimiento, duplicado— de "coincide con otro hecho del
+            -- mismo proveedor" —dos cafés de 3,50 el mismo día, que son dos—,
+            -- y tampoco puede reescribir en su sitio lo que vino de un feed.
+            e.source::text as source
        from entry e
        join posting p on p.entry_id = e.id and p.account_id = $1::uuid
       where e.fingerprint is not null
@@ -116,6 +130,7 @@ export async function existingForAccount(
     amount: money(BigInt(row.amount), row.currency),
     description: row.description,
     fingerprint: row.fingerprint,
+    source: row.source,
     ...(row.external_id === null ? {} : { externalId: row.external_id }),
   }))
 }
@@ -129,6 +144,12 @@ export interface PersistArgs {
   readonly contentSha256: string
   /** El informe tal cual se le devuelve al cliente, ya sin bigint. */
   readonly report: WireReport
+  /**
+   * Cómo entró el dato. Sin declararlo, `persistImport` lo deduce del formato,
+   * que es lo correcto para un fichero. Un feed tiene que decir 'api': es lo
+   * que después permite reescribir en su sitio lo que el banco corrija.
+   */
+  readonly source?: DataSource
 }
 
 export function toPersistInput(args: PersistArgs): PersistImportInput {
@@ -171,6 +192,7 @@ export function toPersistInput(args: PersistArgs): PersistImportInput {
     rejected: report.rejected.length,
     declaredBalances: declaredBalancesOf(args.result.statements),
     report: args.report,
+    ...(args.source === undefined ? {} : { source: args.source }),
   }
 }
 
@@ -182,6 +204,7 @@ function persistable(item: ClassifiedTransaction): PersistableTransaction {
     currency: item.incoming.amount.currency,
     fingerprint: item.fingerprint,
     ...(item.incoming.externalId === undefined ? {} : { externalId: item.incoming.externalId }),
+    ...(item.incoming.valuedOn === undefined ? {} : { valuedOn: item.incoming.valuedOn }),
   }
 }
 

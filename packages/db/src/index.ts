@@ -59,6 +59,30 @@ export {
   updateRule,
 } from './repo/classify.js'
 export type {
+  EnsureLedgerAccountInput,
+  EnsureLedgerAccountResult,
+  FeedAccountRow,
+  FeedConnectionRow,
+  FeedProvider,
+  FeedUserRow,
+  RecordConnectionInput,
+  SaveFeedUserInput,
+  UpdateConnectionInput,
+} from './repo/feed.js'
+export {
+  deleteFeedUser,
+  ensureLedgerAccount,
+  FeedRepoError,
+  listConnections,
+  listFeedAccounts,
+  markFeedAccountSynced,
+  readConnection,
+  readFeedUser,
+  recordConnection,
+  saveFeedUser,
+  updateConnection,
+} from './repo/feed.js'
+export type {
   BookTransactionInput,
   DeclaredBalanceInput,
   ImportBatchRow,
@@ -67,8 +91,17 @@ export type {
   PersistableTransaction,
   PersistImportInput,
   PersistImportResult,
+  UpdateBookedTransactionInput,
+  UpdateBookedTransactionResult,
+  UpdatedField,
 } from './repo/import.js'
-export { bookTransaction, listImportBatches, persistImport, revertImport } from './repo/import.js'
+export {
+  bookTransaction,
+  listImportBatches,
+  persistImport,
+  revertImport,
+  updateBookedTransaction,
+} from './repo/import.js'
 export type {
   DimensionSummary,
   DimensionValueSummary,

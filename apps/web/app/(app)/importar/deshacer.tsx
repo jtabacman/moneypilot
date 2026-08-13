@@ -1,8 +1,19 @@
 'use client'
 
 import { useActionState, useState } from 'react'
-import { deshacerLote, SIN_DESHACER } from './actions'
+import { deshacerLote, type EstadoDeshacer } from './actions'
 import styles from './page.module.css'
+
+/**
+ * El estado inicial, declarado del lado del cliente a propósito.
+ *
+ * Un módulo `'use server'` sólo exporta funciones al cliente; un objeto llega
+ * como `undefined` sin que nada avise. Declarado allá, este componente
+ * arrancaba con `estado.mensaje === undefined` y, como `undefined !== null`,
+ * cada fila del historial enseñaba un "no se pudo" vacío desde el primer
+ * render — un fallo anunciado que no había ocurrido.
+ */
+const SIN_DESHACER: EstadoDeshacer = { ok: false, mensaje: null }
 
 /**
  * El botón de deshacer, en dos pasos y sin `confirm()` del navegador.

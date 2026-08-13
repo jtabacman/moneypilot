@@ -25,6 +25,7 @@
 
 import { newEntryId, newImportBatchId, tryParsePlainDate } from '@moneypilot/core'
 import type { TenantClient } from '../client.js'
+import type { DataSource } from './read-ledger.js'
 
 export interface PersistableTransaction {
   readonly bookedOn: string
@@ -72,6 +73,15 @@ export interface PersistImportInput {
   /** Sólo las nuevas: las duplicadas y las dudosas van por su propio camino. */
   readonly transactions: readonly PersistableTransaction[]
   readonly duplicates: number
+  /**
+   * Movimientos que ya estaban en el libro y que el origen corrigió, aplicados
+   * con `updateBookedTransaction` **antes** de llamar acá.
+   *
+   * Este módulo no los reescribe: sólo los cuenta, para que las cifras del
+   * lote sumen lo leído. Una fila que no aparece en ninguna columna del
+   * historial es un agujero que hace que nadie se crea el informe.
+   */
+  readonly updated?: number
   readonly needsReview: readonly NeedsReviewTransaction[]
   readonly rejected: number
   readonly declaredBalances: readonly DeclaredBalanceInput[]
@@ -83,6 +93,16 @@ export interface PersistImportInput {
    * categorizar que corresponden al signo del movimiento.
    */
   readonly suspenseAccountId?: string
+  /**
+   * Cómo entró el dato. Sin declarar se deduce del formato, que es lo que se
+   * hacía cuando la única entrada era un fichero.
+   *
+   * Un feed tiene que declarar 'api', y no es cosmético: es lo que después
+   * permite distinguir un movimiento del agregador de uno que trajo un
+   * fichero, tanto para el dedup —el identificador del proveedor sólo manda
+   * sobre lo suyo— como para saber qué se puede reescribir en su sitio.
+   */
+  readonly source?: DataSource
 }
 
 export interface PersistImportResult {
@@ -105,6 +125,8 @@ export interface ImportBatchRow {
   readonly linesRead: number
   readonly imported: number
   readonly duplicates: number
+  /** Asientos que ya estaban y que el origen corrigió. Un fichero trae 0. */
+  readonly updated: number
   readonly needsReview: number
   readonly rejected: number
   /** Instante, no fecha de calendario: acá el ISO completo sí es lo correcto. */
@@ -187,8 +209,8 @@ export async function persistImport(
   await client.query(
     `insert into import_batch
        (id, tenant_id, account_id, file_name, format, content_sha256, status,
-        lines_read, imported, duplicates, needs_review, rejected, report)
-     values ($1, $2, $3, $4, $5, $6, 'completed', $7, $8, $9, $10, $11, $12::jsonb)`,
+        lines_read, imported, duplicates, updated, needs_review, rejected, report)
+     values ($1, $2, $3, $4, $5, $6, 'completed', $7, $8, $9, $10, $11, $12, $13::jsonb)`,
     [
       batchId,
       tenantId,
@@ -199,6 +221,7 @@ export async function persistImport(
       input.linesRead,
       input.transactions.length,
       input.duplicates,
+      input.updated ?? 0,
       input.needsReview.length,
       input.rejected,
       toJsonb(input.report),
@@ -210,7 +233,7 @@ export async function persistImport(
     batchId,
     accountId: input.accountId,
     suspense,
-    source: input.format.trim().toLowerCase() === 'pdf' ? 'pdf' : 'file',
+    source: input.source ?? (input.format.trim().toLowerCase() === 'pdf' ? 'pdf' : 'file'),
     transactions: input.transactions,
   })
 
@@ -236,7 +259,7 @@ export interface BookTransactionInput {
    */
   readonly batchId: string | null
   readonly transaction: PersistableTransaction
-  readonly source?: 'file' | 'pdf'
+  readonly source?: DataSource
   /** Contrapartida explícita. Sin ella se usan las bolsas de sin categorizar. */
   readonly suspenseAccountId?: string
 }
@@ -288,6 +311,262 @@ export async function bookTransaction(
     )
   }
   return entryId
+}
+
+export interface UpdateBookedTransactionInput {
+  /** El asiento que ya existe. Sale del `existingId` del veredicto 'updated'. */
+  readonly entryId: string
+  /** La cuenta del extracto: la pata bancaria es la que cuelga de ésta. */
+  readonly accountId: string
+  /** Los valores nuevos, tal como los manda el banco ahora. */
+  readonly transaction: PersistableTransaction
+}
+
+export type UpdatedField =
+  | 'bookedOn'
+  | 'valuedOn'
+  | 'description'
+  | 'amount'
+  | 'externalId'
+  | 'fingerprint'
+  | 'memo'
+
+export interface UpdateBookedTransactionResult {
+  readonly entryId: string
+  /** La pata bancaria, que sigue siendo la misma fila. */
+  readonly bankPostingId: string
+  readonly counterpartPostingId: string
+  /** Lo que cambió de verdad. Vacío si el asiento ya decía lo mismo. */
+  readonly changed: readonly UpdatedField[]
+}
+
+/**
+ * Corrige EN SU SITIO un movimiento que ya está asentado.
+ *
+ * Existe por el tercer veredicto del dedup: cuando el origen es un feed, un
+ * movimiento cuyo identificador de proveedor ya existe pero cuyo importe,
+ * fecha o descripción cambiaron no es un duplicado ni uno nuevo — es el mismo
+ * hecho, corregido por el banco al pasar de pendiente a asentado.
+ *
+ * **La identidad se conserva, y eso es el punto entero.** No se borra y se
+ * vuelve a insertar: el asiento mantiene su id y cada posting el suyo. De la
+ * fila del posting cuelgan las dimensiones (`posting_dimension`), y del
+ * asiento cuelgan la cola de revisión y el lote que lo trajo. Recrearlo
+ * perdería la atribución que una persona hizo a mano por un cambio de dos
+ * céntimos que decidió el banco.
+ *
+ * Esto convive con el libro append-only y no lo contradice: `reversed_by`
+ * existe para corregir lo que alguien ya dio por bueno, y una anulación más un
+ * asiento nuevo son dos líneas en el extracto para lo que el banco considera
+ * un solo movimiento. Por eso mismo un asiento metido en una cadena de
+ * anulación no se toca, y tampoco se toca lo que no vino de un feed.
+ *
+ * Lo que este módulo NO hace, a propósito: no vuelve a emparejar
+ * transferencias ni a aplicar reglas. Si el importe cambia, una pareja de
+ * transferencia que ya estaba marcada puede quedar descuadrada; rehacerla es
+ * trabajo del matcher, no de la escritura.
+ *
+ * El lote sigue siendo el que trajo el asiento la primera vez. Moverlo al lote
+ * de la sincronización que trae la corrección haría que deshacer aquella
+ * importación ya no se llevara el movimiento que creó.
+ */
+export async function updateBookedTransaction(
+  client: TenantClient,
+  input: UpdateBookedTransactionInput,
+): Promise<UpdateBookedTransactionResult> {
+  if (!UUID_RE.test(input.entryId)) {
+    throw new ImportPersistError(`entryId inválido: ${JSON.stringify(input.entryId)}`)
+  }
+
+  const account = await loadAccount(client, input.accountId)
+  // La misma comprobación que en una importación: si la moneda del movimiento
+  // no es la de la cuenta, el asiento no puede balancear.
+  checkTransaction(input.transaction, account.currency, 'transaction')
+
+  const { rows: asientos } = await client.query<{
+    source: DataSource
+    booked_on: string
+    valued_on: string | null
+    description: string
+    fingerprint: string | null
+    external_id: string | null
+    en_cadena: boolean
+  }>(
+    `select e.source::text as source,
+            to_char(e.booked_on, 'YYYY-MM-DD') as booked_on,
+            to_char(e.valued_on, 'YYYY-MM-DD') as valued_on,
+            e.description,
+            trim(e.fingerprint) as fingerprint,
+            e.external_id,
+            (e.reversed_by is not null
+             or exists (select 1 from entry otro where otro.reversed_by = e.id)) as en_cadena
+       from entry e
+      where e.id = $1`,
+    [input.entryId],
+  )
+
+  const asiento = asientos[0]
+  if (asiento === undefined) {
+    // Con RLS, el asiento de otro hogar es indistinguible de uno inexistente.
+    throw new ImportPersistError(`El asiento ${input.entryId} no existe en este hogar.`)
+  }
+  if (asiento.source !== 'api') {
+    throw new ImportPersistError(
+      `El asiento ${input.entryId} entró como '${asiento.source}' y sólo se reescribe en su ` +
+        'sitio lo que vino de un feed. Un dato de fichero o cargado a mano se corrige con un ' +
+        'asiento que lo anule, que es lo que deja rastro de quién cambió qué.',
+    )
+  }
+  if (asiento.en_cadena) {
+    throw new ImportPersistError(
+      `El asiento ${input.entryId} está enlazado con un asiento de anulación: cambiarle el ` +
+        'importe dejaría a su corrector anulando una cifra que ya no existe.',
+    )
+  }
+
+  const fingerprint = input.transaction.fingerprint.toLowerCase()
+  const { rows: choques } = await client.query<{ id: string }>(
+    'select id from entry where fingerprint = $1 and id <> $2 limit 1',
+    [fingerprint, input.entryId],
+  )
+  const choque = choques[0]
+  if (choque !== undefined) {
+    // Dejarlo llegar al índice único daría un error de Postgres que no explica
+    // nada. Y pisar la huella con la vieja tampoco vale: el cruce con lo que
+    // entre por fichero dejaría de encontrar este movimiento.
+    throw new ImportPersistError(
+      `La huella nueva de ${describe(input.transaction)} ya es la del asiento ${choque.id}. ` +
+        'Actualizar éste crearía dos asientos con la misma identidad; hay que decidir a mano ' +
+        'cuál de los dos es el movimiento bueno.',
+    )
+  }
+
+  const { rows: patas } = await client.query<{
+    id: string
+    account_id: string
+    amount: string
+    currency: string
+    base_amount: string | null
+    memo: string | null
+  }>(
+    `select p.id::text as id, p.account_id, p.amount::text as amount,
+            trim(p.currency) as currency, p.base_amount::text as base_amount, p.memo
+       from posting p
+      where p.entry_id = $1
+      order by p.ordinal`,
+    [input.entryId],
+  )
+
+  // La pata bancaria es la de la cuenta del extracto y, si hubiera varias, la
+  // de menor ordinal: el mismo criterio con el que se leen los candidatos del
+  // dedup, para que "el movimiento" signifique la misma fila en los dos sitios.
+  const banco = patas.find((pata) => pata.account_id === input.accountId)
+  if (banco === undefined) {
+    throw new ImportPersistError(
+      `El asiento ${input.entryId} no tiene ninguna pata contra la cuenta ${input.accountId}.`,
+    )
+  }
+  const contrapartidas = patas.filter((pata) => pata !== banco)
+  const contrapartida = contrapartidas[0]
+  if (contrapartida === undefined) {
+    throw new ImportPersistError(
+      `El asiento ${input.entryId} no tiene contrapartida: no hay contra qué balancear la corrección.`,
+    )
+  }
+  if (contrapartidas.length > 1) {
+    // Con el gasto repartido en varias categorías, cambiar el importe exige
+    // decidir a quién se le suma la diferencia. Esa decisión es del usuario.
+    throw new ImportPersistError(
+      `El asiento ${input.entryId} está repartido en ${contrapartidas.length} contrapartidas: ` +
+        'repartir la corrección entre ellas no es una decisión que pueda tomar la importación.',
+    )
+  }
+
+  const anterior = BigInt(banco.amount)
+  const nuevo = input.transaction.amount
+  if (anterior < 0n !== nuevo < 0n) {
+    // Un cargo que se vuelve abono no es una corrección: la contrapartida
+    // dejaría de ser de la clase correcta —un ingreso asentado contra una
+    // cuenta de gasto resta del gasto del mes— y el signo se llevaría por
+    // delante la categorización que ya hubiera.
+    throw new ImportPersistError(
+      `El movimiento ${describe(input.transaction)} cambia de signo (${anterior} → ${nuevo}). ` +
+        'Eso no es el mismo hecho corregido: es otro movimiento.',
+    )
+  }
+  for (const pata of [banco, contrapartida]) {
+    if (pata.base_amount !== null) {
+      // El consolidado está congelado a su fecha y no se recalcula nunca. Si
+      // el importe cambia, ese número pasa a mentir, y recalcularlo acá sería
+      // inventar una tasa.
+      throw new ImportPersistError(
+        `El posting ${pata.id} del asiento ${input.entryId} tiene una conversión congelada a ` +
+          'moneda de reporte; actualizar el importe la dejaría contradiciendo al asiento.',
+      )
+    }
+    if (pata.currency !== account.currency) {
+      throw new ImportPersistError(
+        `El posting ${pata.id} está en ${pata.currency} y la cuenta en ${account.currency}: ` +
+          'el asiento no balancearía después de la corrección.',
+      )
+    }
+  }
+
+  const valuedOn = input.transaction.valuedOn ?? null
+  const externalId = input.transaction.externalId ?? null
+
+  const changed: UpdatedField[] = []
+  if (asiento.booked_on !== input.transaction.bookedOn) changed.push('bookedOn')
+  if (asiento.valued_on !== valuedOn) changed.push('valuedOn')
+  if (asiento.description !== input.transaction.description) changed.push('description')
+  if (anterior !== nuevo) changed.push('amount')
+  if (asiento.external_id !== externalId) changed.push('externalId')
+  if (asiento.fingerprint !== fingerprint) changed.push('fingerprint')
+  // El memo sólo se toca si el llamador manda uno. Sin esto, una corrección
+  // que no trae memo borraría el que hubiera escrito una persona, que es un
+  // dato que el banco no puede corregir porque no es suyo.
+  const memo = input.transaction.memo
+  if (memo !== undefined && banco.memo !== memo) changed.push('memo')
+
+  await client.query(
+    `update entry
+        set booked_on = $2::date,
+            valued_on = $3::date,
+            description = $4,
+            fingerprint = $5,
+            external_id = $6
+      where id = $1`,
+    [
+      input.entryId,
+      input.transaction.bookedOn,
+      valuedOn,
+      input.transaction.description,
+      // En minúsculas por lo mismo que al insertar: `entry_fingerprint_unique`
+      // compara char(64) byte a byte.
+      fingerprint,
+      externalId,
+    ],
+  )
+
+  // Los dos importes se escriben en la misma transacción y el de la
+  // contrapartida se calcula por negación del otro, igual que al insertar: es
+  // lo que garantiza que el asiento siga sumando cero.
+  await client.query('update posting set amount = $2 where id = $1', [banco.id, nuevo.toString()])
+  await client.query('update posting set amount = $2 where id = $1', [
+    contrapartida.id,
+    (-nuevo).toString(),
+  ])
+
+  if (memo !== undefined) {
+    await client.query('update posting set memo = $2 where id = $1', [banco.id, memo])
+  }
+
+  return {
+    entryId: input.entryId,
+    bankPostingId: banco.id,
+    counterpartPostingId: contrapartida.id,
+    changed,
+  }
 }
 
 export interface RevertImportResult {
@@ -417,13 +696,14 @@ export async function listImportBatches(
     lines_read: number
     imported: number
     duplicates: number
+    updated: number
     needs_review: number
     rejected: number
     created_at: Date
     reverted_at: Date | null
   }>(
     `select id, account_id, file_name, format, content_sha256, status, lines_read,
-            imported, duplicates, needs_review, rejected, created_at, reverted_at
+            imported, duplicates, updated, needs_review, rejected, created_at, reverted_at
        from import_batch
       order by created_at desc, id desc
       limit $1`,
@@ -440,6 +720,7 @@ export async function listImportBatches(
     linesRead: row.lines_read,
     imported: row.imported,
     duplicates: row.duplicates,
+    updated: row.updated,
     needsReview: row.needs_review,
     rejected: row.rejected,
     createdAt: row.created_at.toISOString(),
@@ -666,7 +947,7 @@ interface EntryBatch {
   readonly batchId: string | null
   readonly accountId: string
   readonly suspense: SuspenseAccounts
-  readonly source: 'file' | 'pdf'
+  readonly source: DataSource
   readonly transactions: readonly PersistableTransaction[]
 }
 

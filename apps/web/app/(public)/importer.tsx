@@ -235,6 +235,10 @@ export function Report({
         <Tile label="Leídas" value={report.linesRead} />
         <Tile label="Importadas" value={report.imported} />
         <Tile label="Duplicadas" value={report.duplicates} />
+        {/* Sólo cuando las hay. Un fichero nunca reescribe un asiento en su
+            sitio —eso necesita un identificador estable, o sea un feed—, así
+            que un "Corregidas 0" fijo enseñaría un concepto que no aplica. */}
+        {report.updated > 0 && <Tile label="Corregidas" value={report.updated} />}
         <Tile
           label="A revisión"
           value={report.needsReview}

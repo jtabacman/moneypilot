@@ -21,14 +21,19 @@ import {
   type AccountBalance,
   accountBalances,
   type ImportBatchRow,
+  listConnections,
   listImportBatches,
 } from '@moneypilot/db'
 import Link from 'next/link'
+import { Suspense } from 'react'
 import { readHousehold } from '@/lib/data'
+import { catalogoDePrueba } from '@/lib/finapi/catalogo'
+import { PROVEEDOR } from '@/lib/finapi/hogar'
 import { formatDate } from '@/lib/format'
 import { navItem } from '@/lib/nav'
 import { loadDemoData, unloadDemoData } from '../demo-actions'
 import { Empty, PageBar } from '../ui'
+import { type CatalogoVista, ConectarBanco, type ConexionAbierta } from './banco'
 import { Deshacer } from './deshacer'
 import styles from './page.module.css'
 import { type CuentaElegible, Subida } from './upload'
@@ -62,14 +67,26 @@ function puedeImportar(rol: string): boolean {
 
 export default async function ImportarPage() {
   const { session, data } = await readHousehold(async (client) => {
-    const [cuentas, lotes] = await Promise.all([
-      accountBalances(client),
-      listImportBatches(client, LOTES),
-    ])
-    return { cuentas, lotes }
+    // En serie y no con `Promise.all`: las tres consultas van por la MISMA
+    // conexión, y `pg` las encola de todas formas — el paralelismo era
+    // aparente. Lo que sí producía era el aviso de deprecación de llamar a
+    // `query()` con otra en vuelo, que en Next aparece como un error en
+    // pantalla y manda a buscar un problema que no existe.
+    const cuentas = await accountBalances(client)
+    const lotes = await listImportBatches(client, LOTES)
+    const conexiones = await listConnections(client, PROVEEDOR)
+    return { cuentas, lotes, conexiones }
   })
 
   const puede = puedeImportar(session.role)
+
+  const conexiones: ConexionAbierta[] = data.conexiones.map((conexion) => ({
+    id: conexion.id,
+    bankName: conexion.bankName,
+    status: conexion.status,
+    errorDetail: conexion.errorDetail,
+    createdAt: conexion.createdAt,
+  }))
 
   const elegibles: CuentaElegible[] = data.cuentas
     .filter((cuenta) => IMPORTABLES.has(cuenta.kind) && cuenta.closedAt === null)
@@ -122,9 +139,66 @@ export default async function ImportarPage() {
           <Subida cuentas={elegibles} />
         )}
 
+        {/* El feed va después de la subida y no antes: la fuente principal de
+            este producto sigue siendo el fichero, y esto es una segunda vía
+            —hoy con datos simulados— que no puede robarle el sitio.
+
+            Y va dentro de un Suspense porque leer el catálogo es una llamada a
+            un servidor de terceros que tarda más de un segundo en frío. Sin
+            esta frontera, subir un extracto —que no tiene nada que ver con
+            esto— esperaría a que conteste un agregador alemán. */}
+        {puede && (
+          <Suspense fallback={<BuscandoBancos />}>
+            <SeccionDelFeed conexiones={conexiones} />
+          </Suspense>
+        )}
+
         <Historial lotes={data.lotes} nombres={nombres} puede={puede} />
       </div>
     </>
+  )
+}
+
+/* ── El feed del agregador ───────────────────────────────────────────────── */
+
+/**
+ * La sección de conectar un banco, con el catálogo ya resuelto.
+ *
+ * Es un componente aparte para poder suspenderla sola. `catalogoDePrueba` no
+ * lanza nunca —devuelve el fallo como dato— así que un finAPI caído deja esta
+ * sección explicando por qué y el resto de la pantalla intacto.
+ *
+ * Del banco sólo cruza a cliente lo que la pantalla enseña: `listarBancosDePrueba`
+ * devuelve además BIC y BLZ, y mandarle al navegador cien objetos completos
+ * para usar tres campos no lo pide nadie.
+ */
+async function SeccionDelFeed({ conexiones }: { conexiones: readonly ConexionAbierta[] }) {
+  const catalogo = await catalogoDePrueba()
+  const vista: CatalogoVista =
+    catalogo.kind !== 'ok'
+      ? catalogo
+      : {
+          kind: 'ok',
+          bancos: catalogo.bancos.map((banco) => ({
+            id: banco.id,
+            nombre: banco.nombre,
+            interfaces: banco.interfaces,
+            pais: banco.pais,
+          })),
+        }
+  return <ConectarBanco catalogo={vista} conexiones={conexiones} />
+}
+
+function BuscandoBancos() {
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <div>
+          <h2>Conectar un banco</h2>
+          <p className="small faint">Buscando los bancos de prueba de finAPI…</p>
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -209,7 +283,10 @@ function Historial({
             <table>
               <thead>
                 <tr>
-                  <th scope="col">Fichero</th>
+                  {/* "Origen" y no "Fichero": un lote del feed no vino de
+                      ninguno, y llamarlo así haría que alguien lo buscara en
+                      su disco dentro de seis meses. */}
+                  <th scope="col">Origen</th>
                   <th scope="col">Formato</th>
                   <th scope="col">Cuenta</th>
                   <th scope="col">Cuándo (UTC)</th>
@@ -221,6 +298,9 @@ function Historial({
                   </th>
                   <th scope="col" className="r">
                     Duplicadas
+                  </th>
+                  <th scope="col" className="r">
+                    Corregidas
                   </th>
                   <th scope="col" className="r">
                     A revisión
@@ -242,12 +322,15 @@ function Historial({
           </div>
 
           <div className="panel-foot">
-            <b>Leídas</b> son las líneas del fichero; <b>importadas</b>, las que se asentaron.{' '}
-            <b>Duplicadas</b> ya estaban en el libro y se descartaron por huella —nunca en silencio:
-            por eso están contadas acá—. <b>A revisión</b> no entraron al libro y esperan tu
-            criterio en <Link href="/revisar">Revisar</Link>. <b>Rechazadas</b> son filas que el
-            parser no pudo leer. Deshacer un lote borra sus asientos, deja el registro de que
-            ocurrió y libera el fichero para volver a importarlo.
+            <b>Leídas</b> son las líneas que trajo el origen; <b>importadas</b>, las que se
+            asentaron. <b>Duplicadas</b> ya estaban en el libro y se descartaron por huella —nunca
+            en silencio: por eso están contadas acá—. <b>Corregidas</b> ya estaban y el banco las
+            cambió al pasarlas de pendiente a asentadas: se reescribió el asiento en su sitio, sin
+            duplicarlo, y sólo puede pasar con un feed. <b>A revisión</b> no entraron al libro y
+            esperan tu criterio en <Link href="/revisar">Revisar</Link>. <b>Rechazadas</b> son filas
+            que el parser no pudo leer. Deshacer un lote borra sus asientos, deja el registro de que
+            ocurrió y libera el origen para volver a importarlo — salvo las <b>corregidas</b>, que
+            pertenecen al lote que las trajo la primera vez y se van con aquél.
           </div>
         </>
       )}
@@ -296,6 +379,9 @@ function Fila({
       <td className="r num">{lote.imported}</td>
       <td className="r num">
         {lote.duplicates === 0 ? <span className="faint">0</span> : lote.duplicates}
+      </td>
+      <td className="r num">
+        {lote.updated === 0 ? <span className="faint">0</span> : lote.updated}
       </td>
       <td className="r num">
         {/* La cola de revisión sí tiene destino exacto: las filas que este lote

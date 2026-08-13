@@ -21,10 +21,15 @@
 import { accountBalances, persistImport, type TenantClient } from '@moneypilot/db'
 import { NextResponse } from 'next/server'
 import { writeHousehold } from '@/lib/data'
+import {
+  conNombreDeCuenta,
+  contentHash,
+  existingForAccount,
+  toPersistInput,
+} from '@/lib/importacion'
 import { navItem } from '@/lib/nav'
 import { PipelineError, runPipeline, toWireReport, type WireReport } from '@/lib/pipeline'
 import { resolveSession } from '@/lib/session'
-import { conNombreDeCuenta, contentHash, existingForAccount, toPersistInput } from './persist'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60

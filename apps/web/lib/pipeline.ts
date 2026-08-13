@@ -5,6 +5,14 @@
  * de bytes a informe. Cuando exista el contenedor de API, se mueve a un
  * paquete sin que ninguno de los dos consumidores cambie.
  *
+ * Tiene dos entradas y **un solo motor**. `runPipeline` recibe bytes, detecta
+ * el formato y parsea; `runStatements` arranca ya con los extractos hechos,
+ * que es lo que necesita el feed del agregador — sus movimientos no vienen de
+ * un fichero, pero llegan al motor como `ParsedStatement`, igual que un OFX.
+ * Esa segunda entrada existe para que el feed no tenga su propio pipeline: dos
+ * copias del dedup y de la reconciliación divergen, y la que se queda sin
+ * actualizar produce informes que cuadran consigo mismos y con nada más.
+ *
  * `toWireReport` existe por un detalle real: los importes son `bigint` y
  * `JSON.stringify` los rechaza. Se serializan como string decimal canónico, no
  * como número — convertirlos a `number` en la frontera reintroduciría en el
@@ -15,11 +23,14 @@ import {
   assignOrdinals,
   type ClassifiedTransaction,
   classifyIncoming,
+  type DataSource,
   type ImportReport,
   type IncomingTransaction,
+  type Money,
   matchTransfers,
   type ParsedStatement,
   reconcileAccount,
+  type StatementFormat,
   summarizeDedup,
   type TransactionRef,
   type TransferPair,
@@ -33,6 +44,43 @@ export interface PipelineOptions {
   readonly currency?: string
   readonly accountLabel?: string
   readonly existing?: readonly TransactionRef[]
+}
+
+/** Lo que necesita el motor cuando los extractos ya están hechos. */
+export interface StatementsOptions {
+  readonly fileName: string
+  /** Lo declara quien llama: sin bytes no hay nada que detectar. */
+  readonly format: StatementFormat
+  readonly accountLabel?: string
+  readonly existing?: readonly TransactionRef[]
+  /**
+   * Cómo entró el dato. Va a cada `IncomingTransaction` porque el dedup lo
+   * necesita: con `source: 'api'` el identificador del proveedor pasa a mandar
+   * y aparece el veredicto 'updated'. Sin declararlo se comporta como fichero,
+   * que es el camino conservador de siempre.
+   */
+  readonly source?: DataSource
+  /**
+   * Saldo que la cuenta ya tenía en NUESTRO libro antes de esta importación,
+   * por clave de cuenta.
+   *
+   * Es lo que convierte el saldo que declara un feed en una comprobación de
+   * verdad. Un fichero trae su propia apertura y su propio cierre, así que se
+   * concilia solo; un feed sólo trae el saldo de hoy, y contra eso hay que
+   * poner lo que el libro ya decía — si no, el delta no se puede calcular y la
+   * reconciliación se queda en 'sin_saldo_declarado' para siempre. La apertura
+   * que declare el propio extracto siempre gana sobre ésta.
+   */
+  readonly openingFromLedger?: ReadonlyMap<string, Money>
+  /**
+   * Variación de saldo que producen las correcciones en su sitio, por cuenta.
+   *
+   * Un veredicto 'updated' cambia el importe de un asiento que ya estaba, así
+   * que mueve el saldo sin ser una línea importada. Sin sumarlo acá, el
+   * cierre calculado saldría corrido justo por esa diferencia y el delta
+   * culparía a la importación de un cambio que ella misma hizo bien.
+   */
+  readonly movementAdjustments?: ReadonlyMap<string, Money>
 }
 
 export interface PipelineResult {
@@ -58,6 +106,18 @@ export function runPipeline(bytes: Uint8Array, options: PipelineOptions): Pipeli
     )
   }
 
+  return runStatements(statements, {
+    fileName: options.fileName,
+    format: detection.format,
+    ...(options.accountLabel === undefined ? {} : { accountLabel: options.accountLabel }),
+    ...(options.existing === undefined ? {} : { existing: options.existing }),
+  })
+}
+
+export function runStatements(
+  statements: readonly ParsedStatement[],
+  options: StatementsOptions,
+): PipelineResult {
   const incoming: IncomingTransaction[] = []
   for (const [index, statement] of statements.entries()) {
     const accountKey = accountIdFor(statement, index, options)
@@ -79,7 +139,12 @@ export function runPipeline(bytes: Uint8Array, options: PipelineOptions): Pipeli
         amount: line.amount,
         description: line.description,
         ordinal: row.ordinal,
+        ...(options.source === undefined ? {} : { source: options.source }),
         ...(line.externalId === undefined ? {} : { externalId: line.externalId }),
+        // Acompaña a la fila hasta el asiento. No influye en la huella ni en el
+        // dedup: sólo evita que la fecha valor que el origen sí trajo se pierda
+        // entre el parser y la base.
+        ...(line.valuedOn === undefined ? {} : { valuedOn: line.valuedOn }),
       })
     }
   }
@@ -101,18 +166,24 @@ export function runPipeline(bytes: Uint8Array, options: PipelineOptions): Pipeli
   const accounts = statements.map((statement, index) => {
     const accountKey = accountIdFor(statement, index, options)
     const here = accepted.filter((item) => item.incoming.accountId === accountKey)
+    const currency = statement.account.currency
+    const adjustment = options.movementAdjustments?.get(accountKey)
+    // La apertura declarada por el extracto manda: es un dato del banco. La
+    // del libro es un sustituto para los orígenes que no la traen.
+    const opening = statement.openingBalance?.amount ?? options.openingFromLedger?.get(accountKey)
     return reconcileAccount({
       accountId: accountKey,
       accountLabel: labelFor(statement, index, options),
-      currency: statement.account.currency,
+      currency,
       movements: totalMovements(
-        here.map((item) => item.incoming.amount),
-        statement.account.currency,
+        [
+          ...here.map((item) => item.incoming.amount),
+          ...(adjustment === undefined ? [] : [adjustment]),
+        ],
+        currency,
       ),
       linesImported: here.length,
-      ...(statement.openingBalance === undefined
-        ? {}
-        : { openingBalance: statement.openingBalance.amount }),
+      ...(opening === undefined ? {} : { openingBalance: opening }),
       ...(statement.closingBalance === undefined
         ? {}
         : { closingBalance: statement.closingBalance.amount }),
@@ -125,11 +196,12 @@ export function runPipeline(bytes: Uint8Array, options: PipelineOptions): Pipeli
   const report: ImportReport = {
     batchId: 'preview',
     fileName: options.fileName,
-    format: detection.format,
+    format: options.format,
     importedAt: new Date().toISOString(),
     linesRead: allLines.length,
     imported: summary.fresh,
     duplicates: summary.duplicates,
+    updated: summary.updated,
     needsReview: summary.needsReview,
     rejected: statements.flatMap((statement) =>
       statement.warnings
@@ -147,7 +219,7 @@ export function runPipeline(bytes: Uint8Array, options: PipelineOptions): Pipeli
     periodTo: dates[dates.length - 1] ?? null,
   }
 
-  return { statements, classified, transfers, report }
+  return { statements: [...statements], classified, transfers, report }
 }
 
 function parseByFormat(
@@ -193,7 +265,11 @@ function describeEmpty(bytes: Uint8Array, format: string): string {
   return 'no contiene ni STMTRS ni CCSTMTRS'
 }
 
-function accountIdFor(statement: ParsedStatement, index: number, options: PipelineOptions): string {
+interface ConEtiqueta {
+  readonly accountLabel?: string
+}
+
+function accountIdFor(statement: ParsedStatement, index: number, options: ConEtiqueta): string {
   return (
     options.accountLabel ??
     statement.account.accountNumber ??
@@ -202,7 +278,7 @@ function accountIdFor(statement: ParsedStatement, index: number, options: Pipeli
   )
 }
 
-function labelFor(statement: ParsedStatement, index: number, options: PipelineOptions): string {
+function labelFor(statement: ParsedStatement, index: number, options: ConEtiqueta): string {
   const parts = [
     options.accountLabel ?? statement.account.institution,
     statement.account.accountNumber,
@@ -242,6 +318,8 @@ export interface WireReport {
   readonly linesRead: number
   readonly imported: number
   readonly duplicates: number
+  /** Asientos que ya estaban y que el origen corrigió. Un fichero trae 0. */
+  readonly updated: number
   readonly needsReview: number
   readonly rejected: { lineNumber: number; reason: string; detail: string }[]
   readonly transfersMatched: number
@@ -271,6 +349,7 @@ export function toWireReport(report: ImportReport): WireReport {
     linesRead: report.linesRead,
     imported: report.imported,
     duplicates: report.duplicates,
+    updated: report.updated,
     needsReview: report.needsReview,
     rejected: [...report.rejected],
     transfersMatched: report.transfersMatched,

@@ -114,6 +114,16 @@ export interface ImportReport {
   readonly linesRead: number
   readonly imported: number
   readonly duplicates: number
+  /**
+   * Movimientos que ya estaban en el libro y que el origen corrigió: mismo
+   * identificador de proveedor, otro importe, otra fecha u otra descripción.
+   * Sólo puede pasar con un feed; un fichero siempre trae 0.
+   *
+   * Va contado aparte y no sumado a `imported` porque no entró nada nuevo al
+   * libro: se reescribió un asiento en su sitio. Sumarlo inflaría el número
+   * con el que alguien comprueba cuánto se cargó.
+   */
+  readonly updated: number
   readonly needsReview: number
   readonly rejected: readonly RejectedRow[]
   readonly transfersMatched: number
@@ -134,7 +144,9 @@ export interface ImportReport {
 export function importReportIsClean(report: ImportReport): boolean {
   return (
     report.linesRead > 0 &&
-    report.imported + report.duplicates + report.needsReview > 0 &&
+    // `updated` cuenta acá porque también es una fila que se entendió y se
+    // resolvió: una sincronización que sólo trae correcciones hizo su trabajo.
+    report.imported + report.duplicates + report.updated + report.needsReview > 0 &&
     report.rejected.length === 0 &&
     report.accounts.every((account) => account.status !== 'delta')
   )
@@ -190,6 +202,11 @@ export function renderImportReport(report: ImportReport): string {
   lines.push(`  leídas                  ${padLeft(String(report.linesRead), 6)}`)
   lines.push(`  importadas              ${padLeft(String(report.imported), 6)}`)
   lines.push(`  duplicadas descartadas  ${padLeft(String(report.duplicates), 6)}`)
+  // Sólo cuando las hay: un fichero nunca corrige nada en su sitio, y una
+  // línea fija en cero enseñaría un concepto que no aplica en ese caso.
+  if (report.updated > 0) {
+    lines.push(`  corregidas en su sitio  ${padLeft(String(report.updated), 6)}`)
+  }
   lines.push(`  a revisión humana       ${padLeft(String(report.needsReview), 6)}`)
   lines.push(`  rechazadas              ${padLeft(String(report.rejected.length), 6)}`)
   lines.push(`  transferencias emparejadas ${padLeft(String(report.transfersMatched), 3)}`)

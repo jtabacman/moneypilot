@@ -15,7 +15,14 @@ import type { FxRate } from './entry.js'
 import type { Money } from './money.js'
 import type { PlainDate } from './plain-date.js'
 
-export type StatementFormat = 'ofx' | 'qfx' | 'qif' | 'csv' | 'n43' | 'camt053' | 'pdf'
+/**
+ * 'finapi' no es un formato de fichero: es un feed de agregador. Está en la
+ * misma lista a propósito, porque para el motor la diferencia no existe —
+ * entra por `ParsedStatement` igual que un OFX y se persiste con el mismo
+ * `persistImport`. Lo que cambia es el origen (`data_source = 'api'`), no el
+ * camino.
+ */
+export type StatementFormat = 'ofx' | 'qfx' | 'qif' | 'csv' | 'n43' | 'camt053' | 'pdf' | 'finapi'
 
 export type WarningSeverity = 'info' | 'warning' | 'error'
 

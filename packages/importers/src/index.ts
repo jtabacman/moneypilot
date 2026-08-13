@@ -9,6 +9,12 @@ export type { CsvRow, Delimiter } from './csv/tokenize.js'
 export { detectDelimiter, tokenizeCsv } from './csv/tokenize.js'
 export type { FormatDetection } from './detect.js'
 export { detectFormat } from './detect.js'
+export type {
+  FinapiRawAccount,
+  FinapiRawTransaction,
+  MapFinapiOptions,
+} from './finapi/map.js'
+export { mapFinapiAccount, mapFinapiStatements } from './finapi/map.js'
 export type { N43ParseOptions } from './n43/parse.js'
 export { parseN43 } from './n43/parse.js'
 export type { OfxParseOptions } from './ofx/parse.js'

@@ -27,6 +27,7 @@ import {
   type PersistImportInput,
   persistImport,
   revertImport,
+  updateBookedTransaction,
 } from './import.js'
 
 const ADMIN_URL = process.env['DATABASE_URL']
@@ -1021,6 +1022,342 @@ suite('importación en un lote reversible', () => {
     expect(revertido.removedEntries).toBe(1500)
     expect(await saldos()).toEqual({})
   }, 30_000)
+
+  // ── Corrección en su sitio de lo que trae un feed ─────────────────────────
+
+  /** Una importación de feed: lo mismo que un fichero, pero declarando 'api'. */
+  function delFeed(seed: string, amount: bigint, bookedOn?: string): PersistImportInput {
+    return { ...entrada(seed, [movimiento(seed, amount, bookedOn)]), source: 'api' }
+  }
+
+  /** El único asiento del hogar, con la identidad de sus dos patas. */
+  async function elAsiento(): Promise<{
+    entryId: string
+    bancoId: string
+    contrapartidaId: string
+  }> {
+    return enHogar(async (client) => {
+      const { rows } = await client.query<{
+        entry_id: string
+        id: string
+        account_id: string
+      }>('select p.entry_id, p.id::text as id, p.account_id from posting p order by p.ordinal')
+      const banco = rows.find((fila) => fila.account_id === cuenta)
+      const otra = rows.find((fila) => fila.account_id !== cuenta)
+      if (banco === undefined || otra === undefined) {
+        throw new Error('El hogar no tiene un asiento con sus dos patas.')
+      }
+      return { entryId: banco.entry_id, bancoId: banco.id, contrapartidaId: otra.id }
+    })
+  }
+
+  interface Pata {
+    posting_id: string
+    amount: string
+    booked_on: string
+    description: string
+    fingerprint: string
+    source: string
+  }
+
+  async function estado(entryId: string): Promise<Pata[]> {
+    return enHogar(async (client) => {
+      const { rows } = await client.query<Pata>(
+        `select p.id::text as posting_id, p.amount::text as amount,
+                to_char(e.booked_on, 'YYYY-MM-DD') as booked_on, e.description,
+                trim(e.fingerprint) as fingerprint, e.source::text as source
+           from entry e join posting p on p.entry_id = e.id
+          where e.id = $1::uuid
+          order by p.ordinal`,
+        [entryId],
+      )
+      return rows
+    })
+  }
+
+  it('un lote de feed queda marcado como origen api y no como fichero', async () => {
+    await enHogar((client) => persistImport(client, delFeed('origen', -1000n)))
+    const patas = await estado((await elAsiento()).entryId)
+    expect(patas[0]?.source).toBe('api')
+  })
+
+  it('la pata bancaria de una actualización conserva su identidad', async () => {
+    // Lo que importa no es sólo que el importe quede bien: es que sea LA MISMA
+    // fila. De su id cuelgan las dimensiones, y del asiento la cola de
+    // revisión y el lote.
+    await enHogar((client) => persistImport(client, delFeed('correccion', -13589n)))
+    const antes = await elAsiento()
+
+    const resultado = await enHogar((client) =>
+      updateBookedTransaction(client, {
+        entryId: antes.entryId,
+        accountId: cuenta,
+        transaction: {
+          bookedOn: '2026-03-16',
+          description: 'ALLIANZ LV / FLESSA KG',
+          amount: -14000n,
+          currency: 'EUR',
+          fingerprint: hash(`${RUN}-correccion-asentada`),
+        },
+      }),
+    )
+
+    expect(resultado.entryId).toBe(antes.entryId)
+    expect(resultado.bankPostingId).toBe(antes.bancoId)
+    expect(resultado.counterpartPostingId).toBe(antes.contrapartidaId)
+    expect([...resultado.changed].sort()).toEqual([
+      'amount',
+      'bookedOn',
+      'description',
+      'fingerprint',
+    ])
+
+    const despues = await estado(antes.entryId)
+    expect(despues.map((pata) => pata.posting_id)).toEqual([antes.bancoId, antes.contrapartidaId])
+    expect(despues.map((pata) => pata.amount)).toEqual(['-14000', '14000'])
+    expect(despues[0]?.booked_on).toBe('2026-03-16')
+    expect(despues[0]?.description).toBe('ALLIANZ LV / FLESSA KG')
+    expect(despues[0]?.fingerprint).toBe(hash(`${RUN}-correccion-asentada`))
+    // Sigue cuadrando: la contrapartida se calcula por negación, no se relee.
+    expect(despues.reduce((total, pata) => total + BigInt(pata.amount), 0n)).toBe(0n)
+  })
+
+  it('la actualización no se lleva por delante la atribución a dimensiones', async () => {
+    await enHogar((client) => persistImport(client, delFeed('dimension', -5000n)))
+    const antes = await elAsiento()
+
+    await enHogar(async (client) => {
+      const dimension = await client.query<{ id: string }>(
+        `insert into dimension (tenant_id, key, label) values ($1, 'propiedad', 'Propiedad')
+         returning id`,
+        [hogar],
+      )
+      const valor = await client.query<{ id: string }>(
+        `insert into dimension_value (tenant_id, dimension_id, label)
+         values ($1, $2, 'Casa Madrid') returning id`,
+        [hogar, dimension.rows[0]?.id],
+      )
+      await client.query(
+        `insert into posting_dimension (tenant_id, posting_id, dimension_id, dimension_value_id)
+         values ($1, $2::bigint, $3, $4)`,
+        [hogar, antes.bancoId, dimension.rows[0]?.id, valor.rows[0]?.id],
+      )
+    })
+
+    await enHogar((client) =>
+      updateBookedTransaction(client, {
+        entryId: antes.entryId,
+        accountId: cuenta,
+        transaction: {
+          bookedOn: '2026-03-14',
+          description: 'Compra dimension asentada',
+          amount: -5100n,
+          currency: 'EUR',
+          fingerprint: hash(`${RUN}-dimension-asentada`),
+        },
+      }),
+    )
+
+    const atribuciones = await enHogar(async (client) => {
+      const { rows } = await client.query<{ posting_id: string; label: string }>(
+        `select pd.posting_id::text as posting_id, dv.label
+           from posting_dimension pd join dimension_value dv on dv.id = pd.dimension_value_id`,
+      )
+      return rows
+    })
+    expect(atribuciones).toEqual([{ posting_id: antes.bancoId, label: 'Casa Madrid' }])
+  })
+
+  it('la actualización deja el asiento en el lote que lo trajo, que lo sigue deshaciendo', async () => {
+    const lote = await enHogar((client) => persistImport(client, delFeed('lote', -2500n)))
+    const antes = await elAsiento()
+
+    await enHogar((client) =>
+      updateBookedTransaction(client, {
+        entryId: antes.entryId,
+        accountId: cuenta,
+        transaction: {
+          bookedOn: '2026-03-14',
+          description: 'Compra lote asentada',
+          amount: -2600n,
+          currency: 'EUR',
+          fingerprint: hash(`${RUN}-lote-asentada`),
+        },
+      }),
+    )
+
+    const revertido = await enHogar((client) => revertImport(client, lote.batchId))
+    expect(revertido.removedEntries).toBe(1)
+    expect(await saldos()).toEqual({})
+  })
+
+  it('no reescribe en su sitio un asiento que vino por fichero', async () => {
+    // Su identificador es un FITID, no el del proveedor: que coincida es
+    // casualidad, y reescribirlo borraría un dato que nadie pidió cambiar.
+    await enHogar((client) =>
+      persistImport(client, entrada('de-fichero', [movimiento('ff', -100n)])),
+    )
+    const antes = await elAsiento()
+
+    await expect(
+      enHogar((client) =>
+        updateBookedTransaction(client, {
+          entryId: antes.entryId,
+          accountId: cuenta,
+          transaction: {
+            bookedOn: '2026-03-14',
+            description: 'Compra ff',
+            amount: -200n,
+            currency: 'EUR',
+            fingerprint: hash(`${RUN}-ff-2`),
+          },
+        }),
+      ),
+    ).rejects.toThrow(/feed/)
+  })
+
+  it('no reparte la corrección entre varias contrapartidas', async () => {
+    await enHogar((client) => persistImport(client, delFeed('repartido', -10000n)))
+    const antes = await elAsiento()
+
+    // El usuario repartió el gasto en dos categorías: 60/40.
+    await enHogar(async (client) => {
+      await client.query('update posting set amount = -6000 where id = $1::bigint', [
+        antes.contrapartidaId,
+      ])
+      await client.query(
+        `insert into posting (tenant_id, entry_id, account_id, ordinal, amount, currency)
+         select tenant_id, entry_id, account_id, 2, -4000, currency
+           from posting where id = $1::bigint`,
+        [antes.contrapartidaId],
+      )
+    })
+
+    await expect(
+      enHogar((client) =>
+        updateBookedTransaction(client, {
+          entryId: antes.entryId,
+          accountId: cuenta,
+          transaction: {
+            bookedOn: '2026-03-14',
+            description: 'Compra repartido',
+            amount: -11000n,
+            currency: 'EUR',
+            fingerprint: hash(`${RUN}-repartido-2`),
+          },
+        }),
+      ),
+    ).rejects.toThrow(/contrapartida/)
+  })
+
+  it('un cargo que se vuelve abono no es una corrección: se rechaza', async () => {
+    await enHogar((client) => persistImport(client, delFeed('signo', -4520n)))
+    const antes = await elAsiento()
+
+    await expect(
+      enHogar((client) =>
+        updateBookedTransaction(client, {
+          entryId: antes.entryId,
+          accountId: cuenta,
+          transaction: {
+            bookedOn: '2026-03-14',
+            description: 'Compra signo',
+            amount: 4520n,
+            currency: 'EUR',
+            fingerprint: hash(`${RUN}-signo-2`),
+          },
+        }),
+      ),
+    ).rejects.toThrow(/signo/)
+  })
+
+  it('una huella que ya es de otro asiento no se pisa', async () => {
+    await enHogar((client) =>
+      persistImport(client, {
+        ...entrada('choque', [movimiento('ch-1', -100n), movimiento('ch-2', -200n)]),
+        source: 'api',
+      }),
+    )
+
+    const { entryId, ajena } = await enHogar(async (client) => {
+      const { rows } = await client.query<{ id: string; fingerprint: string }>(
+        'select id, trim(fingerprint) as fingerprint from entry order by description',
+      )
+      return { entryId: rows[0]?.id as string, ajena: rows[1]?.fingerprint as string }
+    })
+
+    await expect(
+      enHogar((client) =>
+        updateBookedTransaction(client, {
+          entryId,
+          accountId: cuenta,
+          transaction: {
+            bookedOn: '2026-03-14',
+            description: 'Compra ch-1',
+            amount: -150n,
+            currency: 'EUR',
+            fingerprint: ajena,
+          },
+        }),
+      ),
+    ).rejects.toThrow(/misma identidad/)
+  })
+
+  it('no toca un asiento enlazado con una anulación posterior', async () => {
+    await enHogar((client) =>
+      persistImport(client, {
+        ...entrada('anulado', [movimiento('an-1', -100n), movimiento('an-2', -200n)]),
+        source: 'api',
+      }),
+    )
+
+    const entryId = await enHogar(async (client) => {
+      const { rows } = await client.query<{ id: string }>(
+        'select id from entry order by description',
+      )
+      const primero = rows[0]?.id as string
+      await client.query('update entry set reversed_by = $2 where id = $1', [primero, rows[1]?.id])
+      return primero
+    })
+
+    await expect(
+      enHogar((client) =>
+        updateBookedTransaction(client, {
+          entryId,
+          accountId: cuenta,
+          transaction: {
+            bookedOn: '2026-03-14',
+            description: 'Compra an-1',
+            amount: -150n,
+            currency: 'EUR',
+            fingerprint: hash(`${RUN}-an-1-2`),
+          },
+        }),
+      ),
+    ).rejects.toThrow(/anulación/)
+  })
+
+  it('el hogar de al lado no puede corregir el asiento', async () => {
+    await enHogar((client) => persistImport(client, delFeed('vecino', -900n)))
+    const antes = await elAsiento()
+    const vecino = await nuevoHogar('vecino-feed')
+
+    await expect(
+      withTenant(app, vecino.tenantId, (client) =>
+        updateBookedTransaction(client, {
+          entryId: antes.entryId,
+          accountId: vecino.accountId,
+          transaction: {
+            bookedOn: '2026-03-14',
+            description: 'Compra vecino',
+            amount: -1000n,
+            currency: 'EUR',
+            fingerprint: hash(`${RUN}-vecino-2`),
+          },
+        }),
+      ),
+    ).rejects.toThrow(/no existe en este hogar/)
+  })
 })
 
 if (!enabled) {

@@ -61,3 +61,38 @@
 	gap: var(--s2);
 	align-items: flex-start;
 }
+
+/*
+ * Conectar un banco. Los avisos y el informe salen de globals.css: acá sólo
+ * está la disposición de los controles propios de esta sección.
+ */
+.conectar {
+	display: flex;
+	gap: var(--s3);
+	align-items: center;
+	flex-wrap: wrap;
+	margin: var(--s4) 0;
+}
+
+/*
+ * El bloque del sondeo. Lleva separación arriba porque lo que explica —que no
+ * hay vuelta automática desde finAPI— tiene que leerse antes de pulsar, no
+ * después de buscar el botón.
+ */
+.sondeo {
+	margin-top: var(--s4);
+	padding-top: var(--s3);
+	border-top: 1px solid var(--rule);
+	display: flex;
+	flex-direction: column;
+	gap: var(--s3);
+}
+.sondeo p {
+	margin: 0;
+	max-width: 78ch;
+	color: var(--ink-soft);
+}
+.sondeo ul {
+	margin: 0;
+	padding-left: var(--s4);
+}

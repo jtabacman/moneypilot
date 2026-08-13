@@ -10,7 +10,14 @@ export interface EstadoDeshacer {
   readonly mensaje: string | null
 }
 
-export const SIN_DESHACER: EstadoDeshacer = { ok: false, mensaje: null }
+/*
+ * El estado inicial vive en `deshacer.tsx` y no acá, que sería el sitio
+ * natural. Un módulo `'use server'` sólo exporta funciones al cliente:
+ * cualquier otra cosa llega como `undefined` y nada avisa. Exportado desde
+ * acá, `useActionState` arrancaba con `mensaje: undefined`, y como
+ * `undefined !== null` cada fila del historial pintaba un "no se pudo" vacío
+ * antes de que nadie pulsara nada.
+ */
 
 /**
  * Deshacer un lote entero.

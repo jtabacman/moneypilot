@@ -90,6 +90,7 @@ const baseReport = (overrides: Partial<ImportReport> = {}): ImportReport => ({
   linesRead: 120,
   imported: 115,
   duplicates: 5,
+  updated: 0,
   needsReview: 0,
   rejected: [],
   transfersMatched: 2,
@@ -188,6 +189,28 @@ describe('informe de importación', () => {
     })
     expect(importReportIsClean(empty)).toBe(false)
     expect(renderImportReport(empty)).toContain('no contenía ninguna transacción legible')
+  })
+
+  it('una sincronización que sólo trae correcciones es una importación válida', () => {
+    // El caso del feed: las 12 filas ya estaban y el banco cambió el importe
+    // de todas al pasarlas de pendiente a asentado. No entró nada nuevo, pero
+    // el lote entendió y resolvió lo que trajo — llamarlo "no pasó nada" es
+    // exactamente lo contrario de lo que ocurrió.
+    const report = baseReport({
+      linesRead: 12,
+      imported: 0,
+      duplicates: 0,
+      updated: 12,
+      needsReview: 0,
+    })
+    expect(importReportIsClean(report)).toBe(true)
+    expect(renderImportReport(report)).toContain('corregidas en su sitio')
+  })
+
+  it('el render no habla de correcciones cuando el origen no puede hacerlas', () => {
+    // Un fichero nunca reescribe un asiento en su sitio. Una línea fija en
+    // cero enseñaría un concepto que no aplica y que nadie puede accionar.
+    expect(renderImportReport(baseReport())).not.toContain('corregidas en su sitio')
   })
 
   it('el render declara los problemas en vez de esconderlos', () => {

@@ -156,6 +156,10 @@ export function runPipeline(bytes: Uint8Array, options: PipelineOptions): Pipeli
     linesRead: allLines.length,
     imported: summary.fresh,
     duplicates: summary.duplicates,
+    // Un fichero nunca corrige un asiento en su sitio: eso sólo lo puede
+    // hacer un feed, que es el único origen con un identificador estable
+    // entre pendiente y asentado. Acá siempre es 0, y se declara.
+    updated: summary.updated,
     needsReview: summary.needsReview,
     rejected: statements.flatMap((statement) =>
       statement.warnings

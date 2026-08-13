@@ -9,7 +9,8 @@
       "!**/.next",
       "!**/node_modules",
       "!**/next-env.d.ts",
-      "!**/*.tsbuildinfo"
+      "!**/*.tsbuildinfo",
+      "!.claude/worktrees"
     ]
   },
   "formatter": {

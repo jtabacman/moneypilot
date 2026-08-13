@@ -43,8 +43,24 @@ const existingFrom = (tx: IncomingTransaction, id: string): TransactionRef => ({
     descriptionRaw: tx.description,
     ordinal: tx.ordinal,
   }),
+  ...(tx.source === undefined ? {} : { source: tx.source }),
   ...(tx.externalId === undefined ? {} : { externalId: tx.externalId }),
 })
+
+/** Una fila que llega por el feed: origen 'api' y el id del proveedor. */
+const delFeed = (
+  lineNumber: number,
+  date: string,
+  amount: string,
+  description: string,
+  externalId: string,
+  extra: Partial<IncomingTransaction> = {},
+): IncomingTransaction =>
+  incoming(lineNumber, date, amount, description, {
+    source: 'api',
+    externalId,
+    ...extra,
+  })
 
 describe('pasada 1: determinista', () => {
   it('reimportar el mismo fichero no crea nada', () => {
@@ -59,6 +75,7 @@ describe('pasada 1: determinista', () => {
       total: 2,
       fresh: 0,
       duplicates: 2,
+      updated: 0,
       needsReview: 0,
     })
   })
@@ -253,6 +270,198 @@ describe('propiedades del lote', () => {
     ]
     const existing = [existingFrom(rows[0] as IncomingTransaction, 'tx-1')]
     const summary = summarizeDedup(classifyIncoming(rows, existing))
-    expect(summary.fresh + summary.duplicates + summary.needsReview).toBe(summary.total)
+    expect(summary.fresh + summary.duplicates + summary.updated + summary.needsReview).toBe(
+      summary.total,
+    )
+  })
+})
+
+describe('origen feed: manda el identificador del proveedor', () => {
+  it('el mismo identificador con otro importe es una actualización, no un duplicado', () => {
+    // El banco corrigió el importe de un movimiento que ya nos había dado.
+    // No es un duplicado (lo guardado ya no dice lo que dice el banco) ni es
+    // nuevo (asentarlo otra vez lo contaría dos veces).
+    const guardado = existingFrom(
+      delFeed(1, '2026-03-01', '-135.89', 'ALLIANZ LV / FLESSA KG', '1860779443'),
+      'tx-1',
+    )
+    const corregido = delFeed(1, '2026-03-01', '-140.00', 'ALLIANZ LV / FLESSA KG', '1860779443')
+
+    const [result] = classifyIncoming([corregido], [guardado])
+    expect(result?.verdict).toMatchObject({
+      kind: 'updated',
+      reason: 'external_id',
+      existingId: 'tx-1',
+    })
+    if (result?.verdict.kind !== 'updated') expect.unreachable('tenía que ser una actualización')
+    else {
+      expect(result.verdict.changes.amount).toEqual({
+        before: fromDecimalString('-135.89', EUR),
+        after: fromDecimalString('-140.00', EUR),
+      })
+      // Lo que no cambió no se declara: la descripción es la misma.
+      expect(result.verdict.changes.description).toBeUndefined()
+      expect(result.verdict.changes.bookedOn).toBeUndefined()
+    }
+  })
+
+  it('el vaivén de pendiente a asentado se actualiza en vez de inundar la cola', () => {
+    // Es el caso que hacía inútil la huella con un feed: el agregador cambia
+    // el descriptor y corre la fecha contable cuando el banco asienta.
+    const pendiente = existingFrom(
+      delFeed(1, '2026-03-01', '-3.50', 'PENDIENTE COMPRA TARJETA', '1860779444'),
+      'tx-pendiente',
+    )
+    const asentado = delFeed(1, '2026-03-03', '-3.50', 'CAFE BAR LOLA MADRID', '1860779444')
+
+    const classified = classifyIncoming([asentado], [pendiente])
+    const summary = summarizeDedup(classified)
+    expect(summary.needsReview).toBe(0)
+    expect(summary.updated).toBe(1)
+
+    const verdict = classified[0]?.verdict
+    if (verdict?.kind !== 'updated') expect.unreachable('tenía que ser una actualización')
+    else {
+      expect(verdict.existingId).toBe('tx-pendiente')
+      expect(verdict.changes.bookedOn).toEqual({
+        before: '2026-03-01',
+        after: '2026-03-03',
+      })
+      expect(verdict.changes.description).toEqual({
+        before: 'PENDIENTE COMPRA TARJETA',
+        after: 'CAFE BAR LOLA MADRID',
+      })
+      expect(verdict.changes.amount).toBeUndefined()
+    }
+  })
+
+  it('el identificador aguanta que el ordinal se corra entre sincronizaciones', () => {
+    // Mismo hecho, sin un solo cambio, pero al lote le tocó otro ordinal: la
+    // huella ya no coincide y el identificador del proveedor sí. Sin esto,
+    // cada sincronización volvería a asentar la misma fila.
+    const guardado = existingFrom(delFeed(1, '2026-03-01', '-3.50', 'CAFE', '111'), 'tx-1')
+    const otraVez = delFeed(1, '2026-03-01', '-3.50', 'CAFE', '111', { ordinal: 1 })
+
+    const [result] = classifyIncoming([otraVez], [guardado])
+    expect(result?.verdict).toMatchObject({
+      kind: 'duplicate',
+      reason: 'external_id',
+      existingId: 'tx-1',
+    })
+  })
+
+  it('dos movimientos idénticos del mismo día con identificadores distintos no se funden', () => {
+    // Son dos cafés, no un duplicado. El proveedor ya lo dijo dándoles dos
+    // identificadores, así que ni la huella ni la difusa tienen voto.
+    const rows = [
+      delFeed(1, '2026-03-01', '-3.50', 'CAFE BAR LOLA', '111'),
+      delFeed(2, '2026-03-01', '-3.50', 'CAFE BAR LOLA', '222'),
+    ]
+
+    const classified = classifyIncoming(rows, [])
+    expect(classified.map((c) => c.verdict.kind)).toEqual(['new', 'new'])
+    // Y con huellas distintas: dos filas con la misma huella no entran en la
+    // base, que tiene un índice único por hogar.
+    expect(classified[0]?.fingerprint).not.toBe(classified[1]?.fingerprint)
+  })
+
+  it('tampoco se funden cuando el segundo café llega en otra sincronización', () => {
+    const primero = existingFrom(delFeed(1, '2026-03-01', '-3.50', 'CAFE BAR LOLA', '111'), 'tx-1')
+    const segundo = delFeed(1, '2026-03-01', '-3.50', 'CAFE BAR LOLA', '222')
+
+    const [result] = classifyIncoming([segundo], [primero])
+    expect(result?.verdict.kind).toBe('new')
+    expect(result?.fingerprint).not.toBe(primero.fingerprint)
+    // El desempate es el ordinal, que continúa desde lo ya guardado.
+    expect(result?.ordinal).toBe(1)
+  })
+
+  it('un movimiento que ya entró por fichero y vuelve por el feed se reconoce por la huella', () => {
+    // Acá el identificador del proveedor no sirve —no coincide con el FITID
+    // del OFX— y la huella es la herramienta correcta.
+    const deFichero = existingFrom(
+      incoming(1, '2026-01-15', '-42.50', 'MERCADONA', {
+        source: 'file',
+        externalId: 'FIT-1',
+      }),
+      'tx-fichero',
+    )
+    const delBanco = delFeed(1, '2026-01-15', '-42.50', 'MERCADONA', '1860779443')
+
+    const [result] = classifyIncoming([delBanco], [deFichero])
+    expect(result?.verdict).toMatchObject({
+      kind: 'duplicate',
+      reason: 'fingerprint',
+      existingId: 'tx-fichero',
+    })
+  })
+
+  it('lo reconoce también cuando no se sabe de dónde vino lo guardado', () => {
+    // Un llamador que todavía no lee entry.source no puede quedarse sin la
+    // red: sin origen conocido, la huella manda como siempre.
+    const guardado = existingFrom(incoming(1, '2026-01-15', '-42.50', 'MERCADONA'), 'tx-viejo')
+    const delBanco = delFeed(1, '2026-01-15', '-42.50', 'MERCADONA', '1860779443')
+
+    const [result] = classifyIncoming([delBanco], [guardado])
+    expect(result?.verdict).toMatchObject({ kind: 'duplicate', reason: 'fingerprint' })
+  })
+
+  it('si el fichero traía otro descriptor, el feed lo manda a revisión y no lo duplica', () => {
+    // La huella no puede reconocerlo —el descriptor del agregador nunca es el
+    // del OFX— y duplicar enero entero es el peor resultado posible. Acá la
+    // difusa sigue haciendo falta.
+    const deFichero = existingFrom(
+      incoming(1, '2026-01-15', '-42.50', 'MERCADONA MADRID REF 998877', { source: 'file' }),
+      'tx-fichero',
+    )
+    const delBanco = delFeed(1, '2026-01-16', '-42.50', 'MERCADONA MADRID', '1860779443')
+
+    const [result] = classifyIncoming([delBanco], [deFichero])
+    expect(result?.verdict).toMatchObject({ kind: 'review', candidateId: 'tx-fichero' })
+  })
+
+  it('no reescribe en su sitio un asiento que vino por fichero', () => {
+    // Un FITID que coincide con un identificador del proveedor es casualidad,
+    // no el mismo hecho: reescribir el asiento del fichero borraría un dato
+    // que nadie pidió cambiar.
+    const deFichero = existingFrom(
+      incoming(1, '2026-03-01', '-42.50', 'MERCADONA', {
+        source: 'file',
+        externalId: '1860779443',
+      }),
+      'tx-fichero',
+    )
+    const delBanco = delFeed(1, '2026-03-01', '-99.00', 'ALDI SUED', '1860779443')
+
+    const [result] = classifyIncoming([delBanco], [deFichero])
+    expect(result?.verdict.kind).not.toBe('updated')
+    expect(result?.verdict.kind).toBe('new')
+  })
+
+  it('una fila del feed sin identificador se comporta como un fichero', () => {
+    // Defensa: si el proveedor no manda id, no hay nada estable y el camino
+    // conservador es el de siempre.
+    const guardado = existingFrom(incoming(1, '2026-03-01', '-42.50', 'MERCADONA'), 'tx-1')
+    const sinId = incoming(1, '2026-03-03', '-42.50', 'MERCADONA', { source: 'api' })
+
+    const [result] = classifyIncoming([sinId], [guardado])
+    expect(result?.verdict.kind).toBe('review')
+  })
+
+  it('el resumen cuenta las actualizaciones aparte y el total sigue cerrando', () => {
+    const guardado = existingFrom(delFeed(1, '2026-03-01', '-10.00', 'LUZ', '111'), 'tx-1')
+    const rows = [
+      delFeed(1, '2026-03-01', '-12.00', 'LUZ', '111'),
+      delFeed(2, '2026-03-02', '-20.00', 'AGUA', '222'),
+    ]
+
+    const summary = summarizeDedup(classifyIncoming(rows, [guardado]))
+    expect(summary).toEqual({
+      total: 2,
+      fresh: 1,
+      duplicates: 0,
+      updated: 1,
+      needsReview: 0,
+    })
   })
 })

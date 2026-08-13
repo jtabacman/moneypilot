@@ -24,13 +24,26 @@ export default defineConfig({
     // Los tests corren contra el código fuente, no contra dist/.
     // Así `pnpm test` no depende de haber compilado antes.
     alias: {
+      // El subcamino va PRIMERO: los alias se prueban en orden y por prefijo,
+      // así que con '@moneypilot/db' delante, '@moneypilot/db/migrate' se
+      // resolvería a 'packages/db/src/index.ts/migrate' y no existiría.
+      '@moneypilot/db/migrate': fileURLToPath(
+        new URL('./packages/db/src/migrate.ts', import.meta.url),
+      ),
       '@moneypilot/core': pkg('core'),
       '@moneypilot/importers': pkg('importers'),
       '@moneypilot/db': pkg('db'),
     },
   },
   test: {
-    include: ['packages/*/src/**/*.test.ts', 'apps/*/src/**/*.test.ts'],
+    // `apps/web` no tiene `src/`: su código vive en `lib/` y en `app/`, que es
+    // la convención de Next. Sin esta tercera entrada los tests de ahí existen
+    // y no corre ninguno, que es peor que no tenerlos.
+    include: [
+      'packages/*/src/**/*.test.ts',
+      'apps/*/src/**/*.test.ts',
+      'apps/web/lib/**/*.test.ts',
+    ],
     environment: 'node',
     globals: false,
     // Los tests que necesitan una base real (RLS, roles, repositorio) leen
