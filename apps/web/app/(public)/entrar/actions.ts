@@ -1,7 +1,7 @@
 'use server'
 
 import { redirect } from 'next/navigation'
-import { supabaseServer } from '../../lib/supabase/server'
+import { supabaseServer } from '@/lib/supabase/server'
 
 export interface AuthResult {
   readonly error?: string

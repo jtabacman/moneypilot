@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation'
-import { currentUser } from '../../lib/supabase/server'
+import { currentUser } from '@/lib/supabase/server'
 import { AuthForm } from './form'
 
 export const metadata = { title: 'Entrar — moneypilot' }

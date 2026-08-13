@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useRef, useState } from 'react'
-import type { WireReport } from '../lib/pipeline'
+import type { WireReport } from '@/lib/pipeline'
 
 interface Response {
   readonly report?: WireReport
