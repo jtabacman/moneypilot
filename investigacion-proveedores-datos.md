@@ -397,7 +397,19 @@ Un movimiento real, campo por campo `[V]`:
 
 Banco de pruebas alemán, IBAN alemanes (`DE77...`), códigos de tipo ZKA, categorías en alemán y autenticación por chipTAN `[V]`. Concuerda con lo del catálogo: **`location=ES` devuelve 32 bancos y ninguno es un banco minorista español** — no aparecen BBVA, Santander España, CaixaBank, Sabadell, Bankinter, ING España ni Openbank España `[V]`. Lo único con marca española es `tarjetayou.es`, una tarjeta luxemburguesa (Advanzia). Hay banco de pruebas checo; español no hay `[V]`.
 
-Y por si el filtro de país fuera malo, se comprobó **buscando por nombre**, que es más duro `[V]`:
+**Corrección (13-08-2026).** Este apartado decía que `location=ES` devuelve 32 bancos y que ninguno es español, y en otro sitio se afirmó que ese filtro significa "alcanzables desde España". **Esa explicación no se verificó y no debe darse por buena.** Lo que sí está medido, recorriendo el catálogo entero y agrupando por el campo de país de cada entidad `[V]`:
+
+| País | Bancos | % del catálogo |
+|---|---|---|
+| Alemania | 3.910 | **75,6%** |
+| Austria | 958 | **18,5%** |
+| Italia | 232 | 4,5% |
+| Chequia / Eslovaquia / Países Bajos / Hungría / Luxemburgo / Bélgica / Suiza / Lituania / Liechtenstein | 13 o menos cada uno | 1,4% en total |
+| **España** | **0** | **0%** |
+| **Portugal** | **0** | 0% |
+| **EE. UU.** | **ausente** | — |
+
+Alemania y Austria son el **94,1%**. Y por si el filtro de país fuera malo, se comprobó además **buscando por nombre**, que es más duro `[V]`:
 
 | Búsqueda | Qué aparece | ¿Conectable? |
 |---|---|---|
