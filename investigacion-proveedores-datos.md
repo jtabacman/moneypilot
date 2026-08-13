@@ -397,6 +397,20 @@ Un movimiento real, campo por campo `[V]`:
 
 Banco de pruebas alemán, IBAN alemanes (`DE77...`), códigos de tipo ZKA, categorías en alemán y autenticación por chipTAN `[V]`. Concuerda con lo del catálogo: **`location=ES` devuelve 32 bancos y ninguno es un banco minorista español** — no aparecen BBVA, Santander España, CaixaBank, Sabadell, Bankinter, ING España ni Openbank España `[V]`. Lo único con marca española es `tarjetayou.es`, una tarjeta luxemburguesa (Advanzia). Hay banco de pruebas checo; español no hay `[V]`.
 
+Y por si el filtro de país fuera malo, se comprobó **buscando por nombre**, que es más duro `[V]`:
+
+| Búsqueda | Qué aparece | ¿Conectable? |
+|---|---|---|
+| BBVA | `BANCO BILBAO VIZCAYA ARGENTARIA, Niederlassung Deutschland` | **No: sin interfaces** |
+| CaixaBank | `CAIXABANK Zweigniederlassung Deutschland` | **No: sin interfaces** |
+| Sabadell, Bankinter, Kutxabank, Unicaja | — | **No están en el catálogo** |
+| Openbank | `Openbank Deutschland` | Sí (XS2A, salud 100) — pero es la filial alemana |
+| Banco Santander | `Banco Santander Filiale Frankfurt` | Sí — ídem, sucursal de Fráncfort |
+
+Es decir: lo que existe con nombre español son las **filiales alemanas** de bancos españoles, y las dos que funcionan sirven a clientes alemanes. Los bancos que usa una familia española no están.
+
+Detalle que además importa por otro motivo: varias entidades exponen `WEB_SCRAPER` como interfaz `[V]`. Eso es lectura del canal de banca online con las credenciales del usuario, no PSD2 — la misma categoría de problema que se le señaló a Wealth Reader en 2.3. finAPI también lo hace.
+
 El sandbox es un sandbox y el catálogo de producción puede diferir. Pero **3.933 de 5.169 bancos son alemanes** `[V]`, y eso sí describe dónde vive su cobertura.
 
 ### 11.3 El importe llega como número decimal de JSON
