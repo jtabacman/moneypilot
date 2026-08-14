@@ -429,6 +429,65 @@ ol {
 	color: var(--credit);
 }
 
+/* ═══ Explicación plegable ═══════════════════════════════════════════════ */
+/*
+ * Ver `(app)/plegable.tsx`. El resumen tiene que leerse como un enlace —invita
+ * a abrirse— sin parecer un botón, que es lo que hace un `<summary>` con
+ * estilo de control: promete una acción y da un párrafo.
+ */
+.plegable {
+	border: 1px solid var(--rule);
+	border-radius: var(--radius);
+	background: var(--paper-sunken);
+}
+.plegable > summary {
+	cursor: pointer;
+	padding: var(--s3) var(--s4);
+	font-size: var(--t-small);
+	color: var(--ink-soft);
+	list-style: none;
+	display: flex;
+	align-items: center;
+	gap: var(--s3);
+}
+.plegable > summary::-webkit-details-marker {
+	display: none;
+}
+/* El triángulo, dibujado a mano para que gire: el marcador nativo no se anima
+   y su tamaño depende del navegador. */
+.plegable > summary::before {
+	content: '';
+	width: 0;
+	height: 0;
+	border-left: 5px solid currentColor;
+	border-top: 4px solid transparent;
+	border-bottom: 4px solid transparent;
+	transition: transform 120ms ease;
+	flex: none;
+}
+.plegable[open] > summary::before {
+	transform: rotate(90deg);
+}
+.plegable > summary:hover,
+.plegable > summary:focus-visible {
+	color: var(--ink);
+}
+.plegable-cuerpo {
+	padding: 0 var(--s4) var(--s4);
+	display: flex;
+	flex-direction: column;
+	gap: var(--s3);
+}
+.plegable-cuerpo > * {
+	max-width: var(--reading);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.plegable > summary::before {
+		transition: none;
+	}
+}
+
 /* ═══ Controles ══════════════════════════════════════════════════════════ */
 
 button,

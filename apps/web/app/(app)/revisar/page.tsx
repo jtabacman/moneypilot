@@ -11,6 +11,7 @@ import { readHousehold } from '@/lib/data'
 import { formatDate } from '@/lib/format'
 import { navItem } from '@/lib/nav'
 import { NoData } from '../empty-state'
+import { Plegable } from '../plegable'
 import { Empty, Money, PageBar } from '../ui'
 import { indiceDeCuentas } from './accounts'
 import { motivoSinPermiso, puedeResolver, rotulosDeDecision } from './decision'
@@ -314,29 +315,24 @@ function FilaDePropuesta({
 
 function PorQue() {
   return (
-    <section className="panel">
-      <div className="panel-head">
-        <h2>Por qué está esto acá</h2>
-      </div>
-      <div className="panel-body stack">
-        <p className="lede">
-          La deduplicación corre en dos pasadas. La primera compara identidad exacta —misma cuenta,
-          misma fecha, mismo importe, mismo descriptor normalizado— y ahí sí descarta sola: dos
-          filas idénticas del mismo extracto son la misma fila.
-        </p>
-        <p className="small">
-          La segunda es difusa: mira una ventana de días alrededor y la similitud del texto.{' '}
-          <b>Esa pasada nunca descarta sola.</b> Dos cargos de 84,20 € en la misma tarjeta el mismo
-          día pueden ser un error del banco o pueden ser dos compras reales, y la diferencia no está
-          en los datos: está en tu memoria. Un sistema que elige por su cuenta acierta casi siempre,
-          y el «casi» es plata que desaparece del libro sin que nadie lo note.
-        </p>
-        <p className="small">
-          Lo mismo con las transferencias sin par y con lo que no se puede categorizar: se marca y
-          se muestra, no se adivina. Por eso esta cola es corta y por eso vale la pena mirarla.
-        </p>
-      </div>
-    </section>
+    <Plegable clave="revisar/dedup" pregunta="¿Por qué el motor no descarta estos solo?">
+      <p className="lede">
+        La deduplicación corre en dos pasadas. La primera compara identidad exacta —misma cuenta,
+        misma fecha, mismo importe, mismo descriptor normalizado— y ahí sí descarta sola: dos filas
+        idénticas del mismo extracto son la misma fila.
+      </p>
+      <p className="small">
+        La segunda es difusa: mira una ventana de días alrededor y la similitud del texto.{' '}
+        <b>Esa pasada nunca descarta sola.</b> Dos cargos de 84,20 € en la misma tarjeta el mismo
+        día pueden ser un error del banco o pueden ser dos compras reales, y la diferencia no está
+        en los datos: está en tu memoria. Un sistema que elige por su cuenta acierta casi siempre, y
+        el «casi» es plata que desaparece del libro sin que nadie lo note.
+      </p>
+      <p className="small">
+        Lo mismo con las transferencias sin par y con lo que no se puede categorizar: se marca y se
+        muestra, no se adivina. Por eso esta cola es corta y por eso vale la pena mirarla.
+      </p>
+    </Plegable>
   )
 }
 
