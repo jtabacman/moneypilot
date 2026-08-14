@@ -250,8 +250,31 @@ export function Sparkline({ points }: { points: readonly bigint[] }) {
 
 /* ── Semáforo de reconciliación ──────────────────────────────────────── */
 
-export function ReconStatus({ status }: { status: 'cuadra' | 'delta' | 'sin-declarar' }) {
+/**
+ * `cuadra-feed` es su propio estado y no un `cuadra` con otro texto.
+ *
+ * Cuadrar contra un extracto y cuadrar contra la lectura de un agregador son
+ * dos afirmaciones distintas, y la segunda hay que poder distinguirla de un
+ * vistazo: un extracto es un documento con fecha de cierre que el banco firma;
+ * una lectura es lo que había en un instante y puede contar los pendientes de
+ * otra manera. Enseñarlas iguales sería cómodo hoy y no se podría defender
+ * delante de un contador.
+ */
+export function ReconStatus({
+  status,
+}: {
+  status: 'cuadra' | 'cuadra-feed' | 'delta' | 'sin-declarar'
+}) {
   if (status === 'cuadra') return <span className="status ok">cuadra</span>
+  if (status === 'cuadra-feed')
+    return (
+      <span
+        className="status ok"
+        title="Contra el saldo que el agregador leyó del banco, no contra un extracto declarado."
+      >
+        cuadra · feed
+      </span>
+    )
   if (status === 'delta') return <span className="status bad">delta</span>
   return <span className="status none">sin declarar</span>
 }

@@ -286,8 +286,8 @@ function Alertas({ avisos, cobertura }: { avisos: readonly Alerta[]; cobertura: 
       {avisos.length === 0 ? (
         <Empty title="Nada que reclame tu atención">
           {cobertura.comprobadas === 0
-            ? 'Ninguna obligación recurrente cambió y no hay nada esperando tu criterio. Del extracto no se puede decir nada: ninguna cuenta se pudo comprobar.'
-            : `Ninguna de las ${cobertura.comprobadas} ${cobertura.comprobadas === 1 ? 'cuenta que se pudo comprobar se aparta' : 'cuentas que se pudieron comprobar se apartan'} de su extracto, ninguna obligación recurrente cambió y no hay nada esperando tu criterio.`}
+            ? 'Ninguna obligación recurrente cambió y no hay nada esperando tu criterio. Del banco no se puede decir nada: ninguna cuenta se pudo comprobar.'
+            : `Ninguna de las ${cobertura.comprobadas} ${cobertura.comprobadas === 1 ? 'cuenta que se pudo comprobar se aparta' : 'cuentas que se pudieron comprobar se apartan'} del saldo del banco, ninguna obligación recurrente cambió y no hay nada esperando tu criterio.`}
         </Empty>
       ) : (
         <div className="scroll">
@@ -335,20 +335,40 @@ function Alertas({ avisos, cobertura }: { avisos: readonly Alerta[]; cobertura: 
           nunca declaró un saldo no cuadra ni deja de cuadrar — no se comprobó.
           Es el mismo fallo que el producto denuncia en un total al que le
           faltan movimientos. */}
+      {/* Las comprobadas sólo contra el agregador se dicen SIEMPRE, aunque no
+          falte ninguna: «cuadra con lo que el banco dijo hace tres minutos» es
+          la afirmación más fuerte que hace este producto, y hasta ahora estaba
+          calculada y escondida detrás de un «no se pudo comprobar». */}
+      {cobertura.comprobadasPorFeed > 0 && (
+        <div className="panel-body">
+          <div className="banner">
+            <b>
+              {cobertura.comprobadasPorFeed} de {cobertura.total}{' '}
+              {cobertura.comprobadasPorFeed === 1 ? 'cuenta cuadra' : 'cuentas cuadran'} con el
+              saldo que el agregador leyó del banco.
+            </b>{' '}
+            No tienen extracto declarado —nadie subió uno— pero sí una lectura del banco con su
+            hora, y el libro suma exactamente eso. Es una comprobación distinta de la de un
+            extracto, no más floja: lo que no prueba es el cierre de un día, porque una lectura es
+            de un instante.
+          </div>
+        </div>
+      )}
+
       {sinComprobar > 0 && (
         <div className="panel-body">
           <div className="notice">
             <b>
               {sinComprobar} de {cobertura.total}{' '}
               {cobertura.total === 1 ? 'cuenta no se pudo' : 'cuentas no se pudieron'} comprobar
-              contra el extracto.
+              contra ningún saldo del banco.
             </b>{' '}
             {cobertura.sinDeclarar > 0 && (
               <>
                 {cobertura.sinDeclarar}{' '}
                 {cobertura.sinDeclarar === 1
-                  ? 'no tiene un saldo declarado por el banco'
-                  : 'no tienen un saldo declarado por el banco'}
+                  ? 'no tiene ni extracto declarado ni lectura de un agregador'
+                  : 'no tienen ni extracto declarado ni lectura de un agregador'}
                 .{' '}
               </>
             )}

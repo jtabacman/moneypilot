@@ -27,8 +27,10 @@ export type {
   ClasificadoPorCapa,
   ClasificarAutoOptions,
   Explicacion,
+  MovimientoDeLaPropuesta,
   ObservacionDelOrigen,
   Propuesta as PropuestaAutomatica,
+  RechazoDePropuesta,
   ResumenDeCapa,
   RutaSinCuenta,
 } from './repo/clasificar-auto.js'
@@ -37,6 +39,7 @@ export {
   clasificadoPorCapa,
   clasificarAutomatico,
   explicarClasificacion,
+  rechazarPropuesta,
 } from './repo/clasificar-auto.js'
 export type {
   ApplyAllOptions,
@@ -88,6 +91,7 @@ export type {
   FeedConnectionRow,
   FeedProvider,
   FeedUserRow,
+  ProviderBalanceInput,
   RecordConnectionInput,
   SaveFeedUserInput,
   SaveSyncCursorInput,
@@ -104,6 +108,7 @@ export {
   readConnectionSecret,
   readFeedUser,
   recordConnection,
+  recordProviderBalance,
   saveFeedUser,
   saveSyncCursor,
   updateConnection,
@@ -157,6 +162,7 @@ export {
   proponerPorMemoria,
   recordarPorComercio,
 } from './repo/memoria.js'
+export { instalarPlanDeCuentas, type PlanInstalado } from './repo/plan-de-cuentas.js'
 export type {
   DimensionSummary,
   DimensionValueSummary,
@@ -189,6 +195,7 @@ export type {
   MovementFilter,
   MovementPage,
   MovementRow,
+  MovementSort,
   PeriodTotals,
   ReconciliationRow,
   ReconciliationStatus,

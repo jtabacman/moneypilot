@@ -69,6 +69,7 @@ import {
   type PersistableTransaction,
   persistImport,
   readOpeningEntry,
+  recordProviderBalance,
   reverseEntry,
   type TenantClient,
   updateBookedTransaction,
@@ -179,6 +180,28 @@ export interface AsentarExtractoInput {
    * —o no traiga ninguno— deducirlo habría traducido con la tabla equivocada.
    */
   readonly enriquecidoPor?: 'plaid' | undefined
+  /**
+   * El saldo que el proveedor leyó del banco, con su instante.
+   *
+   * Opcional porque este recorrido sirve a cualquier agregador y uno puede no
+   * declarar saldo. Cuando llega, se guarda **después** de comprobar que el
+   * libro lo sostiene: guardar un saldo que el libro no cuadra convertiría esa
+   * tabla en un segundo relato de la verdad.
+   *
+   * El instante no puede salir de `statement.closingBalance.on`, que es un
+   * `PlainDate`: el grano de día es justamente lo que no sirve acá. Viaja por
+   * este carril paralelo para no tocar `ParsedStatement`, que es contrato
+   * compartido con OFX, QIF, CSV y la Norma 43.
+   */
+  readonly saldoDelProveedor?: SaldoDelProveedor | undefined
+}
+
+export interface SaldoDelProveedor {
+  /** ISO 8601 con hora. */
+  readonly observadoEn: string
+  readonly disponible?: bigint | null
+  /** 'proveedor' si el instante lo dijo la entidad; 'lectura' si es el nuestro. */
+  readonly origen: 'proveedor' | 'lectura'
 }
 
 export async function asentarExtracto(
@@ -362,6 +385,24 @@ export async function asentarExtracto(
           'sostener.',
       )
     }
+  }
+
+  // Ahora sí: el libro ya demostró que sostiene ese saldo. Va después de la
+  // comprobación de arriba y no antes, y va aunque el lote haya salido vacío —
+  // «no entró ningún movimiento nuevo y el banco sigue diciendo 23.772,06» es
+  // una comprobación tan válida como la otra, y es además la normal.
+  if (input.saldoDelProveedor !== undefined && statement.closingBalance !== undefined) {
+    await recordProviderBalance(client, {
+      accountId: input.accountId,
+      provider: input.provider,
+      externalAccountId: input.externalAccountId,
+      observedAt: input.saldoDelProveedor.observadoEn,
+      amount: statement.closingBalance.amount.amount,
+      currency: nuestra.currency,
+      available: input.saldoDelProveedor.disponible ?? null,
+      source: input.saldoDelProveedor.origen,
+      importBatchId: guardado?.batchId ?? null,
+    })
   }
 
   if (guardado === null) {

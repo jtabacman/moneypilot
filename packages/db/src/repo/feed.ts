@@ -484,6 +484,60 @@ export interface EnsureLedgerAccountResult {
  * transacción entera, así que "intentar y ver" se llevaría por delante todo lo
  * escrito hasta ese punto.
  */
+export interface ProviderBalanceInput {
+  readonly accountId: string
+  readonly provider: FeedProvider
+  readonly externalAccountId: string
+  /** ISO 8601 con instante. No es una fecha: ver la migración 012. */
+  readonly observedAt: string
+  readonly amount: bigint
+  readonly currency: string
+  readonly available?: bigint | null
+  /** 'proveedor' si el instante lo dijo la entidad; 'lectura' si es el nuestro. */
+  readonly source: 'proveedor' | 'lectura'
+  readonly importBatchId?: string | null
+}
+
+/**
+ * Guarda lo que el agregador leyó del banco, con su instante.
+ *
+ * Es de sólo añadir: dos lecturas del mismo día son dos filas y ninguna
+ * contradice a la otra. `on conflict do nothing` cubre el único caso
+ * degenerado —reasentar exactamente la misma lectura—, que no es un error sino
+ * un reintento.
+ *
+ * Quien lo llama tiene que haber comprobado antes que el libro sostiene ese
+ * saldo. Guardar un saldo del proveedor que el libro no cuadra convertiría esta
+ * tabla en un segundo relato de la verdad, y entonces las pantallas tendrían
+ * dos cifras y ninguna razón para creer a una más que a la otra.
+ */
+export async function recordProviderBalance(
+  client: TenantClient,
+  input: ProviderBalanceInput,
+): Promise<{ guardado: boolean }> {
+  const tenantId = await currentTenant(client)
+  const { rowCount } = await client.query(
+    `insert into provider_balance
+       (tenant_id, account_id, provider, external_account_id, observed_at,
+        amount, currency, available, observed_source, import_batch_id)
+     values ($1, $2, $3::feed_provider, $4, $5::timestamptz, $6, $7, $8, $9, $10)
+     on conflict (account_id, provider, observed_at) do nothing`,
+    [
+      tenantId,
+      input.accountId,
+      input.provider,
+      input.externalAccountId,
+      input.observedAt,
+      input.amount.toString(),
+      input.currency.trim().toUpperCase(),
+      input.available === undefined || input.available === null ? null : input.available.toString(),
+      input.source,
+      input.importBatchId ?? null,
+    ],
+  )
+  return { guardado: (rowCount ?? 0) > 0 }
+}
+
 export async function ensureLedgerAccount(
   client: TenantClient,
   input: EnsureLedgerAccountInput,

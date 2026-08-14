@@ -33,9 +33,20 @@ export const MAX_ALERTAS = 3
  */
 export interface Comprobacion {
   readonly total: number
-  /** Cuentas con saldo declarado y saldo completo: el delta significa algo. */
+  /** Cuentas con algo contra qué comparar y saldo completo. */
   readonly comprobadas: number
-  /** El banco nunca declaró un saldo contra el que comparar. */
+  /**
+   * De ésas, cuántas se comprobaron **sólo** contra el saldo que leyó el
+   * agregador y no contra un extracto.
+   *
+   * Se cuenta aparte porque no son la misma prueba. Un extracto es un documento
+   * que el banco firma con fecha de cierre; una lectura de un agregador es lo
+   * que había en un instante, y puede traer pendientes contados de otra manera.
+   * Las dos valen; decir que son lo mismo sería el tipo de simplificación que
+   * después no se puede defender delante de un contador.
+   */
+  readonly comprobadasPorFeed: number
+  /** Nada declaró un saldo contra el que comparar: ni extracto ni agregador. */
   readonly sinDeclarar: number
   /** Su saldo deja postings fuera, así que el delta no es comparable. */
   readonly incompletas: number
@@ -44,13 +55,17 @@ export interface Comprobacion {
 export function comprobacion(cuentas: readonly AccountBalance[]): Comprobacion {
   let sinDeclarar = 0
   let incompletas = 0
+  let comprobadasPorFeed = 0
   for (const cuenta of cuentas) {
     if (cuenta.foreignPostings > 0) incompletas += 1
-    else if (cuenta.delta === null) sinDeclarar += 1
+    else if (cuenta.delta !== null) continue
+    else if (cuenta.providerDelta !== null) comprobadasPorFeed += 1
+    else sinDeclarar += 1
   }
   return {
     total: cuentas.length,
     comprobadas: cuentas.length - sinDeclarar - incompletas,
+    comprobadasPorFeed,
     sinDeclarar,
     incompletas,
   }
@@ -105,24 +120,33 @@ export function alertas(entrada: EntradaAlertas): Alerta[] {
   const candidatas: Alerta[] = []
 
   for (const cuenta of entrada.cuentas) {
-    if (cuenta.delta === null || cuenta.delta === 0n) continue
+    // El descuadre puede venir de cualquiera de las dos comprobaciones. Mirar
+    // sólo `delta` dejaba a las cuentas de agregador **sin alerta nunca**, que
+    // es peor que no comprobarlas: la pantalla las daba por buenas.
+    const descuadre = cuenta.delta ?? cuenta.providerDelta
+    if (descuadre === null || descuadre === 0n) continue
     candidatas.push({
       clave: `descuadre:${cuenta.id}`,
       clase: 'descuadre',
       etiqueta: 'no cuadra',
       tono: 'bad',
-      titulo: `${cuenta.name} no cuadra con el extracto`,
+      titulo:
+        cuenta.delta === null
+          ? `${cuenta.name} no cuadra con el saldo del banco`
+          : `${cuenta.name} no cuadra con el extracto`,
       detalle:
-        (cuenta.declaredOn === null
-          ? 'El saldo calculado se aparta del último saldo que declaró el banco.'
-          : `El saldo calculado se aparta del que declaró el banco el ${formatDate(cuenta.declaredOn, 'long')}. O falta un movimiento en el libro, o sobra uno.`) +
+        (cuenta.delta === null
+          ? `El saldo calculado se aparta del que ${cuenta.providerName ?? 'el agregador'} leyó del banco${cuenta.providerBalanceAt === null ? '' : ` el ${formatDate(cuenta.providerBalanceAt.slice(0, 10), 'long')}`}. O falta un movimiento en el libro, o sobra uno.`
+          : cuenta.declaredOn === null
+            ? 'El saldo calculado se aparta del último saldo que declaró el banco.'
+            : `El saldo calculado se aparta del que declaró el banco el ${formatDate(cuenta.declaredOn, 'long')}. O falta un movimiento en el libro, o sobra uno.`) +
         // Un delta calculado sobre un saldo al que le faltan postings no es la
         // diferencia contra el banco: es un número más chico o más grande por
         // una razón que no tiene nada que ver con el extracto.
         (cuenta.foreignPostings > 0
           ? ` Ojo: ${cuenta.foreignPostings} ${cuenta.foreignPostings === 1 ? 'movimiento está anotado' : 'movimientos están anotados'} en otra moneda y no entran en el saldo calculado, así que esta diferencia no es comparable con el extracto hasta que se corrija en el origen.`
           : ''),
-      importe: absoluto(cuenta.delta),
+      importe: absoluto(descuadre),
       moneda: cuenta.currency,
       destino: { tipo: 'cuenta', cuentaId: cuenta.id },
       accion: 'Abrir la cuenta',

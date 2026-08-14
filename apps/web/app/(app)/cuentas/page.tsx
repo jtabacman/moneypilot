@@ -260,9 +260,7 @@ function Fila({ cuenta }: { cuenta: AccountBalance }) {
         <Money amount={cuenta.balance} currency={cuenta.currency} symbol={false} />
       </td>
       <td className="r">
-        {cuenta.declared === null ? (
-          <span className="faint">—</span>
-        ) : (
+        {cuenta.declared !== null ? (
           <>
             <Money amount={cuenta.declared} currency={cuenta.currency} symbol={false} />
             {cuenta.declaredOn !== null && (
@@ -274,13 +272,38 @@ function Fila({ cuenta }: { cuenta: AccountBalance }) {
               </div>
             )}
           </>
+        ) : cuenta.providerBalance !== null ? (
+          // El saldo del agregador ocupa la misma columna y se etiqueta como lo
+          // que es. La columna dice «declarado por el banco» y las dos cosas lo
+          // son; lo que cambia es quién lo trajo y con qué grano — un extracto
+          // cierra un día, una lectura es de un instante.
+          <>
+            <Money amount={cuenta.providerBalance} currency={cuenta.currency} symbol={false} />
+            <div
+              className="small faint"
+              title={
+                cuenta.providerBalanceAt === null
+                  ? undefined
+                  : `Leído por ${cuenta.providerName ?? 'el agregador'} el ${formatDate(cuenta.providerBalanceAt.slice(0, 10), 'long')}`
+              }
+            >
+              {cuenta.providerName ?? 'agregador'}
+              {cuenta.providerBalanceAt === null
+                ? ''
+                : ` · ${formatDate(cuenta.providerBalanceAt.slice(0, 10))}`}
+            </div>
+          </>
+        ) : (
+          <span className="faint">—</span>
         )}
       </td>
       <td className="r">
-        {cuenta.delta === null ? (
-          <span className="faint">—</span>
-        ) : (
+        {cuenta.delta !== null ? (
           <Money amount={cuenta.delta} currency={cuenta.currency} symbol={false} />
+        ) : cuenta.providerDelta !== null ? (
+          <Money amount={cuenta.providerDelta} currency={cuenta.currency} symbol={false} />
+        ) : (
+          <span className="faint">—</span>
         )}
       </td>
       <td>
@@ -291,7 +314,15 @@ function Fila({ cuenta }: { cuenta: AccountBalance }) {
         ) : (
           <ReconStatus
             status={
-              cuenta.delta === null ? 'sin-declarar' : cuenta.delta === 0n ? 'cuadra' : 'delta'
+              cuenta.delta !== null
+                ? cuenta.delta === 0n
+                  ? 'cuadra'
+                  : 'delta'
+                : cuenta.providerDelta !== null
+                  ? cuenta.providerDelta === 0n
+                    ? 'cuadra-feed'
+                    : 'delta'
+                  : 'sin-declarar'
             }
           />
         )}
