@@ -41,6 +41,32 @@ import type { DataSource, MovementRow } from './read-ledger.js'
 
 export type MatchKind = 'contiene' | 'empieza' | 'exacto' | 'regex'
 
+/**
+ * Qué capa del motor decidió una clasificación. Es el enum
+ * `classification_source` de la migración 010, y vive acá porque acá está la
+ * única función que escribe en `classification_change`.
+ *
+ * El orquestador que las combina —y el porqué de este orden— está en
+ * `clasificar-auto.ts`, que reexporta el tipo para que su contrato se lea
+ * entero en un sitio.
+ *
+ * **La ausencia significa una persona.** No hay miembro 'persona' porque las
+ * filas escritas antes de la 010 no lo sabrían decir: de ellas consta que no
+ * las escribió una regla, no que las escribiera alguien.
+ */
+export type Procedencia = 'regla' | 'memoria' | 'senal' | 'proveedor' | 'diccionario'
+
+/** Lo que se registra en la auditoría además de quién y cuándo. */
+export interface Atribucion {
+  readonly procedencia?: Procedencia | null | undefined
+  /**
+   * La frase que contesta «¿por qué esta categoría?», congelada. Ver la
+   * cabecera de la migración 010: reconstruirla después la reconstruiría con
+   * los datos de hoy, y la pregunta es por qué se decidió entonces.
+   */
+  readonly motivo?: string | null | undefined
+}
+
 /** Por qué un movimiento no se pudo clasificar. */
 export type OmitReason =
   /** El asiento no existe en este hogar. */
@@ -63,7 +89,7 @@ export interface ClassifyResult {
   readonly omitidos: readonly OmittedMovement[]
 }
 
-export interface ReclassifyInput {
+export interface ReclassifyInput extends Atribucion {
   readonly entryIds: readonly string[]
   /** Cuenta de gasto o ingreso. Acá no hay tabla de categorías: son cuentas. */
   readonly categoryId: string
@@ -80,7 +106,7 @@ export interface DimensionAssignment {
   readonly weightPpm?: number | undefined
 }
 
-export interface SetDimensionsInput {
+export interface SetDimensionsInput extends Atribucion {
   readonly entryIds: readonly string[]
   readonly assignments: readonly DimensionAssignment[]
   readonly changedBy: string
@@ -342,11 +368,14 @@ function escaparLike(value: string): string {
  * día hace falta, el sitio para arreglarlo es una columna en `account`, no un
  * segundo nombre mágico repartido por el código.
  */
-function esSinCategorizar(alias: string): string {
+export function sqlSinCategorizar(alias: string): string {
   return `(${alias}.name in ('Sin categorizar', 'Ingresos sin categorizar')
       or ${alias}.name like 'Sin categorizar (%)'
       or ${alias}.name like 'Ingresos sin categorizar (%)')`
 }
+
+/** Nombre corto para el uso interno del módulo, que es el mayoritario. */
+const esSinCategorizar = sqlSinCategorizar
 
 /**
  * Un conjunto de movimientos, expresado como un SELECT que devuelve `entry_id`.
@@ -502,6 +531,8 @@ export async function reclassify(
     categoryId,
     ruleId,
     changedBy,
+    procedencia: input.procedencia ?? null,
+    motivo: input.motivo ?? null,
   })
   return { changed, yaEstaban, omitidos }
 }
@@ -534,6 +565,8 @@ async function aplicarCategoria(
     categoryId: string
     ruleId: string | null
     changedBy: string
+    procedencia: Procedencia | null
+    motivo: string | null
   },
 ): Promise<AplicacionCategoria> {
   const base = seleccion.params.length
@@ -541,6 +574,8 @@ async function aplicarCategoria(
   const pRegla = `$${base + 2}`
   const pAutor = `$${base + 3}`
   const pHogar = `$${base + 4}`
+  const pProcedencia = `$${base + 5}`
+  const pMotivo = `$${base + 6}`
 
   const { rows } = await client.query<AplicacionRow>(
     `with candidato as (${seleccion.sql}),
@@ -566,9 +601,11 @@ async function aplicarCategoria(
           -- las filas que se movieron: ni las que ya estaban, ni las omitidas.
           auditoria as (
             insert into classification_change
-                   (tenant_id, posting_id, from_account_id, to_account_id, rule_id, changed_by)
+                   (tenant_id, posting_id, from_account_id, to_account_id, rule_id, changed_by,
+                    procedencia, motivo)
             select ${pHogar}::uuid, c.posting_id, c.from_account_id,
-                   ${pCat}::uuid, ${pRegla}::uuid, ${pAutor}::text
+                   ${pCat}::uuid, ${pRegla}::uuid, ${pAutor}::text,
+                   ${pProcedencia}::classification_source, ${pMotivo}::text
               from cambio c
             returning 1
           )
@@ -584,7 +621,15 @@ async function aplicarCategoria(
                 '{}'::uuid[]) as sin_contrapartida,
        coalesce((select array_agg(distinct pp.entry_id) from pata pp where pp.patas > 1),
                 '{}'::uuid[]) as repartidos`,
-    [...seleccion.params, opts.categoryId, opts.ruleId, opts.changedBy, opts.tenantId],
+    [
+      ...seleccion.params,
+      opts.categoryId,
+      opts.ruleId,
+      opts.changedBy,
+      opts.tenantId,
+      opts.procedencia,
+      opts.motivo,
+    ],
   )
 
   const row = rows[0]
@@ -631,6 +676,8 @@ export async function setDimensions(
     changedBy,
     elegibles,
     asignaciones,
+    procedencia: input.procedencia ?? null,
+    motivo: input.motivo ?? null,
   })
   return { changed: elegibles.length, omitidos }
 }
@@ -758,6 +805,8 @@ async function escribirDimensiones(
     changedBy: string
     elegibles: readonly PataElegible[]
     asignaciones: readonly AsignacionNormalizada[]
+    procedencia: Procedencia | null
+    motivo: string | null
   },
 ): Promise<void> {
   const postingIds = opts.elegibles.map((pata) => pata.postingId)
@@ -800,10 +849,19 @@ async function escribirDimensiones(
   // to_account_id`.
   await client.query(
     `insert into classification_change
-            (tenant_id, posting_id, from_account_id, to_account_id, rule_id, changed_by)
-     select $1::uuid, x.posting_id, x.account_id, x.account_id, null, $4::text
+            (tenant_id, posting_id, from_account_id, to_account_id, rule_id, changed_by,
+             procedencia, motivo)
+     select $1::uuid, x.posting_id, x.account_id, x.account_id, null, $4::text,
+            $5::classification_source, $6::text
        from unnest($2::bigint[], $3::uuid[]) as x(posting_id, account_id)`,
-    [opts.tenantId, postingIds, opts.elegibles.map((pata) => pata.accountId), opts.changedBy],
+    [
+      opts.tenantId,
+      postingIds,
+      opts.elegibles.map((pata) => pata.accountId),
+      opts.changedBy,
+      opts.procedencia,
+      opts.motivo,
+    ],
   )
 }
 
@@ -924,8 +982,14 @@ let savepointSeq = 0
  * transacción entera: capturarlo en TypeScript devolvería un mensaje bonito y
  * la siguiente consulta fallaría igual con "current transaction is aborted".
  * El savepoint es lo que convierte "se rompió todo" en "esta regla no anduvo".
+ *
+ * Se exporta por un segundo uso con la misma forma y más en juego: la
+ * clasificación que corre al final de una importación va dentro de la misma
+ * transacción que acaba de escribir el lote, así que «si el enganche falla, la
+ * importación no se pierde» no se cumple capturando la excepción — se cumple
+ * con esto.
  */
-async function conSavepoint<T>(client: TenantClient, fn: () => Promise<T>): Promise<T> {
+export async function conSavepoint<T>(client: TenantClient, fn: () => Promise<T>): Promise<T> {
   savepointSeq += 1
   const nombre = `clasificacion_${savepointSeq}`
   await client.query(`savepoint ${nombre}`)
@@ -1552,6 +1616,11 @@ async function aplicarReglaSobre(
   ids: { categoria: readonly string[]; dimensiones: readonly string[] },
   opts: { tenantId: string; changedBy: string },
 ): Promise<AplicacionRegla> {
+  // La procedencia y el motivo son de la regla, no de quien la disparó: da lo
+  // mismo que la pasada la haya lanzado una persona desde /reglas o la haya
+  // lanzado una importación. Lo que se registra es quién decidió la categoría.
+  const atribucion = { procedencia: 'regla' as const, motivo: motivoDeRegla(regla) }
+
   let resultado: AplicacionCategoria = { changed: 0, yaEstaban: 0, cambiados: [], omitidos: [] }
   if (regla.categoryId !== null && ids.categoria.length > 0) {
     resultado = await aplicarCategoria(client, porIds(ids.categoria), {
@@ -1559,6 +1628,7 @@ async function aplicarReglaSobre(
       categoryId: regla.categoryId,
       ruleId: regla.id,
       changedBy: opts.changedBy,
+      ...atribucion,
     })
   }
 
@@ -1577,6 +1647,7 @@ async function aplicarReglaSobre(
         dimensionValueId: dim.valueId,
         weightPpm: dim.weightPpm,
       })),
+      ...atribucion,
     })
   }
 
@@ -1613,6 +1684,9 @@ async function aplicarReglaSobre(
  * comparación: la consulta única existiría, pero se armaría concatenando tantas
  * ramas como reglas haya y sería ilegible justo donde importa entender qué se
  * aplicó y por qué.
+ *
+ * Tiene un gemelo de sólo lectura justo debajo, `planRules`, que reparte igual
+ * y no escribe. Si tocás el reparto de acá, tocá el de allá.
  */
 export async function applyAllRules(
   client: TenantClient,
@@ -1696,6 +1770,142 @@ export async function applyAllRules(
 
 function mensaje(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Cómo se cuenta una regla cuando alguien pregunta «¿por qué esta categoría?».
+ *
+ * Se escribe acá y no en la pantalla porque acá está la regla entera: el que
+ * lea la auditoría dentro de seis meses puede encontrarse con que la regla se
+ * borró, y entonces el `rule_id` es un puntero a nada. Esta frase sobrevive.
+ */
+function motivoDeRegla(regla: RuleRow): string {
+  const como: Record<MatchKind, string> = {
+    contiene: 'contiene',
+    empieza: 'empieza por',
+    exacto: 'es exactamente',
+    regex: 'coincide con la expresión regular',
+  }
+  return (
+    `Lo decidió tu regla «${regla.name}» (prioridad ${regla.priority}), porque la descripción ` +
+    `${como[regla.matchKind]} «${regla.matchValue}».`
+  )
+}
+
+// ── El mismo reparto, sin escribir ──────────────────────────────────────────
+
+export interface ReclamoDeRegla {
+  readonly regla: RuleRow
+  /** La frase con la que esta regla se explica. Ver `motivoDeRegla`. */
+  readonly motivo: string
+  /** Movimientos cuya CATEGORÍA se queda esta regla. */
+  readonly categoria: readonly string[]
+  /** Movimientos a los que esta regla les escribiría alguna dimensión nueva. */
+  readonly dimensiones: readonly string[]
+}
+
+export interface PlanDeReglas {
+  /** Una entrada por regla que reclama algo, en orden de prioridad. */
+  readonly porRegla: readonly ReclamoDeRegla[]
+  /** Movimiento → la regla que se queda con su categoría. */
+  readonly categoria: ReadonlyMap<string, RuleRow>
+  /** Movimiento → las dimensiones que le escribirían las reglas que lo alcanzan. */
+  readonly dimensiones: ReadonlyMap<string, RuleDimensionRow[]>
+  /** Reglas que reventaron al evaluarse. Una regex inválida es el caso. */
+  readonly fallidas: readonly { ruleId: string; name: string; error: string }[]
+}
+
+/**
+ * Qué haría el conjunto de reglas, movimiento por movimiento, **sin tocar nada**.
+ *
+ * Es el gemelo de sólo lectura de `applyAllRules`, y existe porque el
+ * orquestador automático tiene que poder contestar dos preguntas que aquélla no
+ * contesta: *qué regla* se queda con cada movimiento —para poder escribir el
+ * motivo y para que las capas de abajo no le pisen el trabajo— y qué pasaría si
+ * la pasada no se aplicara, que es el modo en que la pantalla de reglas enseña
+ * el reparto antes de que nadie escriba nada.
+ *
+ * **Reparte igual que `applyAllRules` y tiene que seguir haciéndolo.** Están
+ * pegadas a propósito, una debajo de la otra, porque el día que el reparto
+ * cambie en una y no en la otra el motor aplicaría una cosa y explicaría otra —
+ * y eso no se ve, se lee mal. Hay un test que las compara sobre el mismo lote.
+ *
+ * La única diferencia inevitable: allá cada regla se aplica antes de que la
+ * siguiente evalúe, así que un movimiento que ya salió de la bolsa de «Sin
+ * categorizar» deja de ser candidato por sí solo. Acá nada se mueve, así que
+ * ese efecto se reproduce a mano descontando lo ya reclamado.
+ */
+export async function planRules(
+  client: TenantClient,
+  opts: {
+    entryIds?: readonly string[] | undefined
+    soloSinCategorizar?: boolean | undefined
+  } = {},
+): Promise<PlanDeReglas> {
+  const soloSinCategorizar = opts.soloSinCategorizar !== false
+  const entryIds =
+    opts.entryIds === undefined ? undefined : assertEntryIds(opts.entryIds, 'entryIds')
+  const porRegla: ReclamoDeRegla[] = []
+  const categoria = new Map<string, RuleRow>()
+  const dimensiones = new Map<string, RuleDimensionRow[]>()
+  const fallidas: { ruleId: string; name: string; error: string }[] = []
+  if (entryIds !== undefined && entryIds.length === 0) {
+    return { porRegla, categoria, dimensiones, fallidas }
+  }
+
+  const reglas = await listRules(client, { soloActivas: true })
+  const dimensionTomada = new Map<string, Set<string>>()
+
+  for (const regla of reglas) {
+    let candidatos: string[]
+    try {
+      candidatos = await conSavepoint(client, () =>
+        coincidenciasDe(client, regla, { entryIds, soloSinCategorizar }),
+      )
+    } catch (error) {
+      fallidas.push({ ruleId: regla.id, name: regla.name, error: mensaje(error) })
+      continue
+    }
+
+    const miCategoria: string[] = []
+    const misDimensiones: string[] = []
+
+    for (const id of candidatos) {
+      // Ya salió de la bolsa por una regla anterior: en la pasada de verdad
+      // esta regla ni siquiera lo vería.
+      if (soloSinCategorizar && categoria.has(id)) continue
+      if (regla.categoryId !== null && !categoria.has(id)) {
+        categoria.set(id, regla)
+        miCategoria.push(id)
+      }
+
+      let escribeAlgo = false
+      for (const dim of regla.dimensions) {
+        const tomados = dimensionTomada.get(dim.dimensionId) ?? new Set<string>()
+        // Una dimensión la escribe la primera regla que llegue; las de abajo no
+        // la pisan, que es lo que invertiría el orden de prioridad en silencio.
+        if (tomados.has(id)) continue
+        tomados.add(id)
+        dimensionTomada.set(dim.dimensionId, tomados)
+        const puestas = dimensiones.get(id) ?? []
+        puestas.push(dim)
+        dimensiones.set(id, puestas)
+        escribeAlgo = true
+      }
+      if (escribeAlgo) misDimensiones.push(id)
+    }
+
+    if (miCategoria.length > 0 || misDimensiones.length > 0) {
+      porRegla.push({
+        regla,
+        motivo: motivoDeRegla(regla),
+        categoria: miCategoria,
+        dimensiones: misDimensiones,
+      })
+    }
+  }
+
+  return { porRegla, categoria, dimensiones, fallidas }
 }
 
 /** Los ids que coinciden. Sin savepoint: lo pone quien la llama si hace falta. */

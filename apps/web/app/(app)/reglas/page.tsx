@@ -9,8 +9,17 @@
  * lista de reglas es una lista de intenciones.
  */
 
-import { accountBalances, listRules, uncategorized } from '@moneypilot/db'
+import {
+  accountBalances,
+  type ClasificacionAutomatica,
+  type ClasificadoPorCapa,
+  clasificadoPorCapa,
+  clasificarAutomatico,
+  listRules,
+  uncategorized,
+} from '@moneypilot/db'
 import Link from 'next/link'
+import { etiquetaDeCapa, nombreDeCapa, ORDEN_DE_CAPAS } from '@/lib/capas'
 import { readHousehold } from '@/lib/data'
 import { navItem } from '@/lib/nav'
 import { NoData } from '../empty-state'
@@ -43,10 +52,16 @@ export default async function ReglasPage() {
     const afectados = new Map<string, number | null>()
     for (const regla of reglas) afectados.set(regla.id, await contarAfectados(client, regla))
 
-    return { reglas, cuentas, pendiente, afectados }
+    // Las dos mitades del resumen por capa, y son preguntas distintas: qué hay
+    // hoy clasificado por cada una (mirando el libro) y qué haría el motor
+    // ahora mismo con lo que queda (una pasada en seco, que no escribe nada).
+    const yaHecho = await clasificadoPorCapa(client)
+    const enSeco = await clasificarAutomatico(client, { aplicar: false })
+
+    return { reglas, cuentas, pendiente, afectados, yaHecho, enSeco }
   })
 
-  const { reglas, cuentas, pendiente, afectados } = data
+  const { reglas, cuentas, pendiente, afectados, yaHecho, enSeco } = data
   const cabecera =
     ITEM === undefined ? { title: 'Reglas' } : { title: ITEM.label, blurb: ITEM.blurb }
   const monedaDeCuenta = new Map(cuentas.map((cuenta) => [cuenta.id, cuenta.currency]))
@@ -83,10 +98,12 @@ export default async function ReglasPage() {
           Cambiar la categoría de un movimiento arregla ese movimiento;{' '}
           <b>una regla arregla de una vez todos los que se le parecen</b>, los de hoy y los de hace
           dos años. Por eso una regla se mira antes de aplicarla: alcanza a lo que ya está
-          registrado, y eso puede ser trabajo que alguien hizo a mano. Que además corra sola sobre
-          cada importación nueva está previsto —para eso una regla se puede parar— pero{' '}
-          <b>todavía no está construido</b>: hoy la pasada se lanza a mano desde la regla.
+          registrado, y eso puede ser trabajo que alguien hizo a mano.{' '}
+          <b>Sobre cada importación nueva corren solas</b>, con las capas de abajo detrás — y por
+          eso una regla se puede parar.
         </p>
+
+        <PorCapa yaHecho={yaHecho} enSeco={enSeco} />
 
         <div className="panel">
           <div className="panel-head">
@@ -296,10 +313,9 @@ export default async function ReglasPage() {
                 alcance. Por eso el orden de esta tabla es el orden en que se aplican.
               </li>
               <li>
-                Una regla <b>parada</b> quedará fuera de la pasada automática sobre cada importación
-                cuando ésa exista; aplicarla a mano desde su pantalla se puede igual, porque es un
-                acto explícito de alguien que la está mirando. Lo que ya clasificó se queda como
-                está.
+                Una regla <b>parada</b> queda fuera de la pasada que corre en cada importación;
+                aplicarla a mano desde su pantalla se puede igual, porque es un acto explícito de
+                alguien que la está mirando. Lo que ya clasificó se queda como está.
               </li>
               <li>
                 El enlace al registro marcado con <span className="faint">≈</span> lleva a un
@@ -317,5 +333,135 @@ export default async function ReglasPage() {
         </div>
       </div>
     </>
+  )
+}
+
+/* ── El reparto por capa ─────────────────────────────────────────────────── */
+
+/**
+ * Qué clasifica el motor solo, por capa, y qué haría ahora mismo.
+ *
+ * Son dos columnas y son dos preguntas distintas, y mezclarlas sería el error
+ * que este panel existe para no cometer: **«ya puesto»** mira el libro y cuenta
+ * lo que cada capa decidió y sigue en pie; **«propondría ahora»** es una pasada
+ * en seco sobre lo que queda sin categorizar, que no escribe nada.
+ *
+ * Que casi todo caiga en «propondría» y casi nada en «aplicadas» no es un
+ * defecto de la pantalla: sólo las reglas, la memoria confirmada y las señales
+ * del banco se escriben solas. El diccionario y el agregador proponen y espera
+ * una persona, y decirlo acá con el número delante es más honesto que un
+ * porcentaje de acierto que nadie puede comprobar.
+ */
+function PorCapa({
+  yaHecho,
+  enSeco,
+}: {
+  yaHecho: readonly ClasificadoPorCapa[]
+  enSeco: ClasificacionAutomatica
+}) {
+  const puesto = new Map(yaHecho.map((fila) => [fila.procedencia, fila.movimientos]))
+  const propone = new Map(enSeco.porCapa.map((capa) => [capa.procedencia, capa]))
+  const filas = ORDEN_DE_CAPAS.filter((capa) => (puesto.get(capa) ?? 0) > 0 || propone.has(capa))
+  const aMano = puesto.get(null) ?? 0
+
+  if (filas.length === 0 && aMano === 0 && enSeco.sinPropuesta === 0) return null
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <h2>Qué clasifica el motor solo</h2>
+        <small>en orden de precedencia</small>
+      </div>
+
+      <div className="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Capa</th>
+              <th scope="col">Qué sabe</th>
+              <th scope="col" className="r">
+                Ya puesto
+              </th>
+              <th scope="col" className="r">
+                Propondría ahora
+              </th>
+              <th scope="col" className="r">
+                De ésos, sin preguntar
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {filas.map((capa) => {
+              const ahora = propone.get(capa)
+              return (
+                <tr key={capa}>
+                  <td>
+                    <b>{etiquetaDeCapa(capa)}</b>
+                  </td>
+                  <td className="small faint">{nombreDeCapa(capa)}</td>
+                  <td className="r num">{puesto.get(capa) ?? 0}</td>
+                  <td className="r num">{ahora?.propuestas ?? 0}</td>
+                  <td className="r num">{ahora?.automaticas ?? 0}</td>
+                </tr>
+              )
+            })}
+            {aMano > 0 && (
+              <tr>
+                <td>
+                  <b>A mano</b>
+                </td>
+                <td className="small faint">lo que decidió una persona</td>
+                <td className="r num">{aMano}</td>
+                <td className="r faint">—</td>
+                <td className="r faint">—</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {enSeco.rutasSinCuenta.length > 0 && (
+        <div className="panel-foot">
+          <b>Categorías que te faltan.</b> El motor reconoció el comercio de estos movimientos y no
+          encontró en tu plan de cuentas dónde ponerlos. Crear la cuenta los clasifica de una vez:
+          <ul>
+            {enSeco.rutasSinCuenta.slice(0, 8).map((perdida) => (
+              <li key={`${perdida.procedencia}${perdida.ruta}`}>
+                <b>{perdida.ruta}</b> — {perdida.movimientos} movimiento(s), según{' '}
+                {nombreDeCapa(perdida.procedencia)}
+              </li>
+            ))}
+          </ul>
+          <Link href="/estructura">Ver el plan de cuentas</Link>
+        </div>
+      )}
+
+      <div className="notes">
+        <h3>Cómo se leen</h3>
+        <ul>
+          <li>
+            <b>Ya puesto</b> cuenta la última decisión de cada movimiento y sólo si sigue en pie: si
+            el motor clasificó y después lo corregiste, cuenta como tuyo. Contar el intento sería el
+            número que más se parece a una mentira útil.
+          </li>
+          <li>
+            Una capa sólo se consulta cuando las de arriba no tuvieron nada que decir. Por eso la
+            tabla va en este orden y no por cantidad: <b>cuanto más cerca de vos, más manda</b>.
+          </li>
+          <li>
+            Las tres primeras se aplican solas; el agregador y el diccionario <b>proponen</b> y
+            esperan a una persona. Cuando confirmás tres veces el mismo comercio, pasa a la memoria
+            y a partir de ahí se clasifica solo.
+          </li>
+          {enSeco.sinPropuesta > 0 && (
+            <li>
+              Hay <b>{enSeco.sinPropuesta}</b> movimientos sin categorizar sobre los que ninguna
+              capa tiene nada que decir. Ésos se arreglan con una regla, o clasificándolos a mano
+              tres veces para que la memoria los aprenda.
+            </li>
+          )}
+        </ul>
+      </div>
+    </div>
   )
 }

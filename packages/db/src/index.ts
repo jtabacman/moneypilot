@@ -22,6 +22,23 @@ export { ConnectionStringError, SUPABASE_ROOT_CA_2021, toClientConfig } from './
 // forma de llamarlas sin declarar de quién son los datos que se piden.
 
 export type {
+  CategoriaDelProveedor,
+  ClasificacionAutomatica,
+  ClasificadoPorCapa,
+  ClasificarAutoOptions,
+  Explicacion,
+  ObservacionDelOrigen,
+  Propuesta as PropuestaAutomatica,
+  ResumenDeCapa,
+  RutaSinCuenta,
+} from './repo/clasificar-auto.js'
+export {
+  ClasificacionError,
+  clasificadoPorCapa,
+  clasificarAutomatico,
+  explicarClasificacion,
+} from './repo/clasificar-auto.js'
+export type {
   ApplyAllOptions,
   ApplyAllResult,
   ApplyRuleOptions,
@@ -31,7 +48,10 @@ export type {
   MatchKind,
   OmitReason,
   OmittedMovement,
+  PlanDeReglas,
   PreviewOptions,
+  Procedencia,
+  ReclamoDeRegla,
   ReclassifyInput,
   RuleDimensionInput,
   RuleDimensionRow,
@@ -49,12 +69,15 @@ export {
   applyAllRules,
   applyRule,
   ClassifyError,
+  conSavepoint,
   createRule,
   deleteRule,
   listRules,
+  planRules,
   previewRule,
   reclassify,
   setDimensions,
+  sqlSinCategorizar,
   uncategorized,
   updateRule,
 } from './repo/classify.js'
@@ -117,6 +140,23 @@ export {
   revertImport,
   updateBookedTransaction,
 } from './repo/import.js'
+export type {
+  DimensionRecordada,
+  MemoriaOptions,
+  MovimientoAClasificar,
+  OpcionDeCategoria,
+  Propuesta,
+  RecuerdoDeComercio,
+} from './repo/memoria.js'
+export {
+  AUTOR_AUTOMATICO,
+  autorAutomatico,
+  esAutorAutomatico,
+  MemoriaError,
+  MINIMO_POR_DEFECTO,
+  proponerPorMemoria,
+  recordarPorComercio,
+} from './repo/memoria.js'
 export type {
   DimensionSummary,
   DimensionValueSummary,

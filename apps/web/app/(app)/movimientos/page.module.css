@@ -135,6 +135,18 @@ details[open] > .sumario::after {
 	border-bottom-color: var(--accent);
 }
 
+/* La procedencia de una categoría automática, debajo de su nombre. Apagada y
+   con el subrayado punteado del resto de la pantalla: es un dato de segundo
+   plano que se consulta, no algo que compita con la categoría. */
+.porque {
+	margin-top: 2px;
+	color: var(--ink-faint);
+}
+.porque > span {
+	border-bottom: 1px dotted var(--rule-strong);
+	cursor: help;
+}
+
 .barra {
 	display: grid;
 	gap: var(--s3);

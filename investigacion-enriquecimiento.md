@@ -494,3 +494,161 @@ Lo que Plaid aporta gratis, incluido en la agregación que de todos modos vamos 
 | Acierto de Plaid contra Triqai / Context.dev sobre el mismo corpus | `[?]` | Los 40 descriptores ya están en `descriptores-es.mjs`: el día que haya clave, se corre igual |
 
 **La pregunta abierta más incómoda es la tercera**, y conviene decirla fuerte: **no está verificado que el motor de enriquecimiento del sandbox sea el de producción.** Si en producción fuera mejor, estos números son un suelo; si fuera peor, son un techo. No se puede saber desde acá `[?]`. Todo lo de arriba se lee con esa condición encima.
+
+---
+
+## 12. Auditoría del motor propio, y la comparación cara a cara contra Plaid
+
+**Fecha:** 13 de agosto de 2026 (tercera pasada del día; posterior a §11)
+**Pregunta que contesta:** §11 midió a Plaid solo. Faltaban las dos preguntas que de verdad deciden: **¿el motor propio clasifica de verdad, o está maquillado para que la demo se vea bien?** Y, ya medido sin maquillaje, **¿gana o pierde contra Plaid sobre los mismos descriptores?**
+**Método:** auditoría del código y de la base, más dos mediciones nuevas — los mismos 40 descriptores españoles por los dos motores, y el corpus alemán entero como grupo de control. Reproducible con los scripts del scratchpad (`dicc-vs-corpus.mjs`, `motor-nuestro.mjs`, `motor-plaid.mjs`, `comparar.mjs`, `veredicto.mjs`). Llamadas HTTP del 13-08-2026.
+
+### 12.0 Veredicto
+
+**No hay trampa, y el número real es más bajo y más honesto que el que luciría una demo maquillada. No hace falta comprar enriquecimiento — pero por un motivo distinto del de §11, y hay un arreglo de esquema que vale más que cualquier compra.**
+
+- **La auditoría sale limpia** `[V]`. Cero reglas y cero filas de `classification_change` en el hogar del corpus; las 2 reglas y 61 filas que existen en la base están en otro hogar de sondeo y son genéricas (Repsol, Netflix). Ningún descriptor del corpus aparece en el diccionario. **De las 264 entradas del diccionario, sólo 21 tocan el corpus alemán** — el 92% no se activa nunca contra él, que es lo contrario de lo que produce un diccionario calcado.
+- **El número real del corpus alemán: 284 propuestas sobre 1.616 sin categorizar (17,6%), y CERO aplicadas solas** `[V]`. No es un buen número y es el correcto.
+- **Cara a cara sobre 40 descriptores españoles, revisados uno a uno: nosotros 27/40 bien (67,5%), Plaid 30/40 (75%)** `[V]`. Plaid gana por tres.
+- **Pero fallan de forma distinta, y la diferencia es el producto entero:** de sus 13 fallos, los nuestros son **12 silencios y 1 mentira**. Los 10 de Plaid son **10 mentiras**, porque Plaid nunca se calla: pone categoría en el 100% de las líneas, incluidas las que no la tienen.
+- **Y aparece el contraejemplo que le faltaba a §11: Plaid SÍ inventa comercios.** `NOMINA ABONO MENSUAL EMPRESA ACME SL` vuelve como comercio **«Acme Markets»** y categoría **`FOOD_AND_DRINK_GROCERIES`**, con **`VERY_HIGH`** `[V]`. Una nómina contada como la compra del súper, con la máxima confianza. §11 midió «cero inventados sobre 15»; con este descriptor son **1 sobre 16**.
+- **Segunda corrección a §11: `confidence_level` sí viene relleno.** §11.3 lo dio por `UNKNOWN` en 156/156. En esta pasada, con `ins_109508`, el reparto es **LOW 24, HIGH 10, VERY_HIGH 6** `[V]`, determinista entre dos corridas. **Y sirve de filtro**: en HIGH+VERY_HIGH, Plaid acierta 14 de 16 (88%); en LOW, 16 de 24 (67%).
+
+**Decisión: no se compra enriquecimiento.** El motivo no es que ganemos —no ganamos—, sino que **lo que nos falta no se compra**: 12 de nuestros 13 fallos son cobertura de diccionario y una columna que no existe. Ver §12.6.
+
+### 12.1 La auditoría: dónde estaría la trampa y qué se encontró
+
+Se buscó exactamente donde el encargo dijo que mirara.
+
+| Dónde | Qué se buscó | Resultado |
+|---|---|---|
+| `rule` del hogar del corpus | reglas escritas contra descriptores concretos | **0 reglas** `[V]` |
+| `classification_change` del hogar del corpus | filas metidas a mano | **0 filas** `[V]` |
+| Resto de la base | reglas sospechosas en cualquier hogar | 2 reglas, en `Sonda reglas`, genéricas (`contiene Repsol`, `contiene Netflix`), creadas por `vista-previa@local` `[V]` |
+| Diccionario | entradas calcadas del corpus | **21 de 264 entradas tocan el corpus** `[V]` |
+| Diccionario | nombres de relleno del corpus | Mustermann, Musterstadt, Braumüller, Winzergenossenschaft, Nabholz, Flessa, Barabhebung: **ninguno está** `[V]` |
+| Tests | ¿comprueban valores o sólo que no explota? | 25 tests, 73 aserciones, sobre base real `[V]` |
+
+**La prueba más fuerte es la del 92%.** Un diccionario escrito mirando el corpus tendría casi todas sus entradas activándose contra él. Éste tiene 243 entradas que no se activan **nunca** — y las que sí, son cadenas reales (Aldi, Lidl, Telekom, Deutsche Bahn, Aral, Hornbach) que aparecen junto a otras del mismo ramo que **no** están en el corpus: hay Penny, Netto, Kaufland, Esso y Total en el diccionario y ninguna en los datos. Es una lista de comercios alemanes, no un calco.
+
+**Las trampas que estaban a mano y no se tomaron** `[V]`, que es lo que más dice:
+
+- Los cuatro descriptores más repetidos del corpus son `Barabhebung · GA 470/11` (92), `Max Mustermann · Sparen` (58), `VB Musterstadt · …` (138 entre tres variantes) y `Braumüller GmbH · Lohn und Gehalt` (46). **Ninguno se reconoce.** Añadirlos habría subido el número del corpus en ~330 movimientos de un plumazo.
+- `ALLIANZ LV / FLESSA KG` aparece 46 veces y es el ejemplo literal de trampa que citaba el encargo. Allianz está en el diccionario **como `ambigua`, sin categoría**: se reconoce la aseguradora y no se propone nada. Igual HUK-COBURG (46), que llega con `BEITRAG KRANKENVERSICHERUNG` en el concepto y aun así no se clasifica.
+- En `comercios-internacionales.ts` está escrito el criterio de las clases de comercio, y por qué «Café», «Bar» y «Gasthaus» quedaron **fuera**: *«los habría añadido después de mirar los descriptores del corpus de prueba, que es exactamente la trampa que convierte un diccionario en una demo maquillada»*. En el corpus hay 44 `Bar Centrale`, 40 `Cafe am Dom` y 46 entre varios `Gasthaus`. **130 movimientos que se dejaron sin clasificar a propósito.**
+
+**Lo que sí conviene saber, y no es trampa** `[I]`: tres entradas alemanas son marcas históricas que casualmente encajan con este corpus —`tengelmann` (cadena liquidada como supermercado en 2016), `agip` (rebautizada Eni) y `dab-bank` (absorbida en 2016)—. Son comercios reales y su aporte al número es de **4 movimientos** (`dab-bank` es ambigua y no clasifica nada). No se tocaron: quitar marcas reales por ser antiguas empobrecería el diccionario sin mejorar la medición.
+
+**Conclusión de la auditoría: no se quitó nada, porque no había nada que quitar** `[V]`.
+
+### 12.2 El grupo de control: 1.616 movimientos alemanes, pasada en seco
+
+| | |
+|---|---|
+| Movimientos sin categorizar en el hogar `aaaa1111…` | **1.616** (el encargo decía 1.612; son 1.374 gastos + 242 ingresos) `[V]` |
+| Descriptores distintos | **62** `[V]` |
+| Con clave de comercio no vacía | 1.616 (100%) — es una clave de agrupación, no un comercio reconocido |
+| **Reconocidos por el diccionario** | **874 (54,1%)** `[V]` |
+| …de ésos, con categoría (los demás son ambiguos) | 590 (36,5%) |
+| **Propuestas del motor, ya resueltas contra el plan de cuentas** | **284 (17,6%)** `[V]` |
+| **Aplicadas solas** | **0** `[V]` |
+| Reglas fallidas | 0 |
+
+**Los 306 que se pierden entre «tiene categoría» y «hay propuesta» no son un fallo: son la lista de trabajo.** El motor los devuelve en `rutasSinCuenta`, y dice exactamente qué cuenta falta:
+
+| Movimientos | Ruta que este hogar no tiene |
+|---|---|
+| 50 | Ingresos > Nóminas y salarios |
+| 50 | Vivienda > Mantenimiento y reparaciones |
+| 50 | Transporte > Alquiler y renting |
+| 46 | Viajes > Alojamiento |
+| 46 | Transporte > Transporte público |
+| 46 | Día a día > Restaurantes y bares |
+| 18 | Transporte > Mantenimiento y taller |
+
+Crear siete cuentas clasificaría 306 movimientos más — pasaría de 284 a 590 (36,5%). Es una frase accionable, no un cero.
+
+**Por qué sólo participó el diccionario** `[V]`: no hay reglas ni memoria en ese hogar (los 720 movimientos ya categorizados los escribió el sembrador directamente, sin dejar filas de auditoría, así que la memoria no tiene de qué aprender — y es correcto que no cuenten como logro del motor). Y las capas de **señal** y **proveedor** no pueden aportar nada sobre un libro ya cargado, por el motivo de §12.5.
+
+### 12.3 Cara a cara: 40 descriptores españoles por los dos motores
+
+Los 40 se escribieron para esta pasada, con la forma real de un extracto español y **antes de mirar qué sabe cada motor**. Son otros que los de §11. Cubren supermercados, energía, telecos, seguros, colegios, transporte, combustible, impuestos, comunidad, Bizum, cajeros, traspasos propios, hipoteca y honorarios. `[I]` **Los construí yo**: misma limitación que §11.1, y no se cierra hasta que haya extractos españoles reales.
+
+| | nuestro motor | Plaid |
+|---|---|---|
+| **% con comercio asignado** | **26/40 (65%)** `[V]` — 23 marcas + 3 clases de comercio | **7/40 (17,5%)** `[V]` |
+| **% con categoría** | **21/40 (53%)** `[V]` | **40/40 (100%)** `[V]` |
+| **BIEN, revisado uno a uno** | **27/40 (67,5%)** `[V]` | **30/40 (75%)** `[V]` |
+| — categoría correcta | 20 | 30 |
+| — se calló, y callarse era lo correcto | **7** | **0** |
+| — silencio indebido (falta de cobertura) | 12 | 0 |
+| — **categoría equivocada afirmada** | **1** | **10** |
+
+**«BIEN» significa**: o acertó la categoría, o no propuso ninguna cuando la línea no permitía deducir ninguna (un Bizum entre personas, un reintegro de cajero, un traspaso a cuenta propia). Un silencio correcto cuenta como acierto; un silencio sobre una línea clasificable, no.
+
+### 12.4 Los fallos, con nombre y apellido
+
+**Los 13 nuestros.** Uno solo es una mentira; los otros doce son huecos del diccionario:
+
+| # | Descriptor | Nosotros | Debería ser |
+|---|---|---|---|
+| **14** | `RECIBO SEGURO HOGAR MUTUA MADRILENA` | **Seguros > Seguro de vehículos** ← **el único error real** | Seguro de hogar. La entrada `mutua-madrilena` es de vehículos con confianza `media`, y la línea dice «SEGURO HOGAR». Se propone, no se aplica; aun así está mal `[V]` |
+| 4 | `COMPRA TARJ 1122 FRUTERIA HERMANOS SOLIS` | — | frutería de barrio. Plaid la acierta |
+| 10 | `RECIBO VODAFONE ESPANA SAU FACTURA MOVIL` | — | **Vodafone no está en el diccionario.** Hueco llamativo |
+| 12 | `RECIBO MAPFRE ESPANA CIA DE SEGUROS POLIZA…` | — | Mapfre es `ambigua` y calla; la línea decía «CIA DE SEGUROS» |
+| 18 | `RECARGA TARJETA TRANSPORTE PUBLICO CRTM` | — | el alias del CRTM es «Consorcio Regional de Transportes»; en el extracto llega la sigla |
+| 24 | `TGSS RECIBO AUTONOMOS REGIMEN ESPECIAL` | — | el alias es «Seguridad Social», no «TGSS» |
+| 25, 26, 27 | IBI, comunidad de propietarios, administración de fincas | — | tres conceptos de vivienda sin ninguna marca detrás |
+| 34, 35 | amortización de préstamo hipotecario, cuota de hipoteca | — | en el 35 reconoce BBVA (ambigua) y no le sirve |
+| 36, 37 | honorarios de gestoría, asesoría fiscal | — | |
+
+**Los 10 de Plaid.** Todos son afirmaciones equivocadas:
+
+| # | Descriptor | Plaid dijo | Confianza |
+|---|---|---|---|
+| **40** | `NOMINA ABONO MENSUAL EMPRESA ACME SL` | **`FOOD_AND_DRINK_GROCERIES`, comercio «Acme Markets»** | **VERY_HIGH** |
+| 2 | `PAGO EN CARREFOUR EXPRESS ALCALA 218 MADRID` | `GENERAL_MERCHANDISE_CONVENIENCE_STORE` | HIGH |
+| 5 | `RECIBO IBERDROLA CLIENTES SAU` | `GENERAL_SERVICES_OTHER_GENERAL_SERVICES` | LOW |
+| 11 | `ADEUDO ORANGE ESPAGNE SAU` | `FOOD_AND_DRINK_RESTAURANT` | LOW |
+| 20 | `COMPRA TARJ 5432 REPSOL E.S. LOS ANGELES` | `GENERAL_MERCHANDISE_OTHER` | LOW |
+| 22 | `COMPRA GALP ENERGIA ESPANA SAU` | `RENT_AND_UTILITIES_GAS_AND_ELECTRICITY` | LOW |
+| 23 | `AEAT MODELO 130 PAGO FRACCIONADO IRPF` | `TRANSFER_OUT_ACCOUNT_TRANSFER` | LOW |
+| 26, 27 | comunidad de propietarios, administración de fincas | `RENT_AND_UTILITIES_RENT` | LOW |
+| 28 | `BIZUM A FAVOR DE JAVIER MARTIN CONCEPTO CENA` | `FOOD_AND_DRINK_RESTAURANT` | LOW |
+
+**Ocho de los diez son LOW**, y ahí está el hallazgo operativo: **la confianza de Plaid discrimina.** En HIGH+VERY_HIGH acierta 14 de 16 (88%); en LOW, 16 de 24 (67%). Esto **corrige §11.3**, que la dio por inservible: con `ins_109508` el campo viene relleno y es un filtro utilizable. Los dos errores de confianza alta son el #2 (discutible: Carrefour Express es formato de conveniencia) y el #40, que no es discutible.
+
+### 12.5 Los que correctamente no llevan comercio
+
+De los 40, **16 no deben llevar comercio**: los tres impuestos, las dos de comunidad, los dos Bizum, los dos cajeros, los dos traspasos propios, las dos de hipoteca, los dos de honorarios y la nómina. Ponerle un comercio a una de ésas es el error, no el acierto.
+
+- **Plaid le puso comercio a 1 de 16**: «Acme Markets» en la nómina `[V]`. Las otras 15, limpias — el hallazgo de §11 se sostiene salvo por esa.
+- **Nuestro motor le puso «comercio» a 5 de 16**, y conviene mirarlas de cerca antes de contarlas como fallos `[V]`: `Agencia Tributaria` (#23) es el organismo que cobra y la categoría resultante —Impuestos— es correcta; `Bizum` (#28, #29) es el raíl de pago, está marcado `ambigua` y **no propone categoría**; `BBVA` (#35) idem. Ninguna de las cinco produce una categoría equivocada. **Es una imprecisión de vocabulario —el diccionario mezcla marcas con conceptos y con raíles— y no un error de clasificación.**
+
+**Y el defecto estructural que explica el corpus alemán** `[V]`: la tabla `entry` no tiene columna para `merchant_name`, `personal_finance_category`, `payment_channel` ni el IBAN de la contraparte. Esos campos llegan en el `raw` del importador y **se pierden al persistir**. Consecuencia medida: las capas de **señal** y **proveedor** sólo funcionan enganchadas a la importación, y sobre un libro ya cargado aportan exactamente cero — que es por lo que el corpus alemán se clasificó sólo con el diccionario. El motor documenta esta limitación en su propia cabecera en vez de esconderla, lo cual está bien; pero sigue siendo la pieza que más cuesta.
+
+### 12.6 ¿Hace falta comprar enriquecimiento? No — y qué hacer en su lugar
+
+**No.** Con tres razones, en orden de peso `[I]`:
+
+1. **Ya lo tenemos pagado.** La `personal_finance_category` viene incluida en el producto *transactions* de Plaid, que es el agregador que ya usamos. Un enriquecedor aparte cobraría por la mitad que Plaid ya nos da. Y pasada por nuestra propia tabla de traducción, **33 de las 40 etiquetas de Plaid se traducen a una ruta de nuestro árbol** `[V]`; las 7 que no son `TRANSFER_*` y `OTHER_OTHER` — y está bien que no se traduzcan, porque un traspaso no es una categoría.
+2. **Lo que nos falta no se compra.** De nuestros 13 fallos, 12 son cobertura: Vodafone, la sigla del CRTM, la de la TGSS, y seis conceptos —IBI, comunidad, hipoteca, honorarios— **que ningún enriquecedor de comercios resuelve porque no tienen comercio**. Es el mismo hallazgo que §0 y §3.4 ya habían visto por otro camino, y ahora está medido sobre nuestro propio motor.
+3. **Comprar más confianza ajena empeora el fallo caro.** Nuestro motor miente una vez de 40 y se calla doce; Plaid miente diez veces y nunca se calla. Un movimiento en «Sin categorizar» cuesta un clic; uno mal clasificado con `VERY_HIGH` contamina los totales y se descubre tres meses después. **La nómina como compra del súper es exactamente el fallo que no queremos comprar.**
+
+**El trabajo que sí rinde, por orden** `[I]`:
+
+1. **Una columna para lo que trae el origen** (`merchant_name`, `personal_finance_category`, `payment_channel`, concepto de la Norma 43). Hoy dos de las cinco capas están muertas fuera de la importación. Es la única de esta lista que es de esquema y la que más devuelve: sin ella, reclasificar un libro histórico nunca podrá usar ni la señal ni a Plaid.
+2. **Siete cuentas en el hogar del corpus.** 284 → 590 propuestas (17,6% → 36,5%), sin tocar una línea de motor.
+3. **Arreglar `mutua-madrilena`**: pasarla a `ambigua`, como Mapfre. Es el único error real del motor en los 40 y son tres líneas.
+4. **Huecos obvios del diccionario español**: Vodafone, y las siglas CRTM y TGSS como alias adicionales de las entradas que ya existen.
+5. **Usar `confidence_level` de Plaid como filtro** (§12.4): HIGH+VERY_HIGH acierta 88%. Sigue siendo sugerencia, nunca aplicación automática.
+
+### 12.7 Qué quedó sin verificar en esta sección
+
+| Afirmación | Estado | Cómo se cierra |
+|---|---|---|
+| Que los 40 descriptores se parezcan a un extracto español real | `[I]` **los construí yo**, igual que §11.1 | Un extracto español de verdad. Sigue siendo la tarea más valiosa del documento |
+| Que el enriquecimiento del sandbox sea el de producción | `[?]` heredado de §11.7, **y sigue condicionando todos los números de Plaid** | Preguntar a Plaid, o comparar contra un Item real |
+| Por qué `confidence_level` viene relleno ahora y en §11 no | `[?]` la diferencia visible es la entidad (`ins_109508` aquí, `ins_76` en §11) | Repetir §11 con las dos entidades y comparar |
+| Que el 92% de entradas del diccionario que no tocan el corpus sean todas comercios reales | `[P]` revisadas por muestreo, no las 243 una a una | Revisión completa, o el primer extracto real que las contradiga |
+| Que el corpus alemán represente descriptores bancarios reales | `[?]` heredado de §3.1 — es la demo de finAPI | Sólo se cierra con extractos reales |

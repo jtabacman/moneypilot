@@ -3,8 +3,10 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useActionState, useCallback, useId, useState } from 'react'
+import type { ClasificacionDelLote } from '@/lib/clasificar'
 import type { WireReport } from '@/lib/pipeline'
 import { Report } from '../../(public)/importer'
+import { ResumenDeClasificacion } from './clasificacion'
 import styles from './page.module.css'
 import { conectarPlaid, type EstadoConexionPlaid } from './plaid-actions'
 
@@ -91,6 +93,7 @@ interface CuentaVista {
   readonly report?: WireReport
   readonly review?: { lineNumber: number; bookedOn: string; description: string }[]
   readonly anulados?: readonly AnulacionVista[]
+  readonly clasificacion?: ClasificacionDelLote
 }
 
 interface RespuestaSincronizar {
@@ -438,6 +441,10 @@ function ResultadoDeCuenta({ salida }: { salida: CuentaVista }) {
             )}
             . Lote <code>{(salida.batchId ?? '').slice(0, 8)}</code>: se deshace entero desde el
             historial de abajo.
+            <ResumenDeClasificacion
+              clasificacion={salida.clasificacion}
+              cuentaId={salida.accountId}
+            />
           </div>
         ) : (
           <div className="notice">

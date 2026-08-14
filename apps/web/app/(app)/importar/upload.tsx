@@ -3,8 +3,10 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useCallback, useId, useRef, useState } from 'react'
+import type { ClasificacionDelLote } from '@/lib/clasificar'
 import type { WireReport } from '@/lib/pipeline'
 import { Report } from '../../(public)/importer'
+import { ResumenDeClasificacion } from './clasificacion'
 import styles from './page.module.css'
 
 export interface CuentaElegible {
@@ -33,6 +35,7 @@ interface Respuesta {
     on: string
     confidence: string
   }[]
+  readonly clasificacion?: ClasificacionDelLote
   readonly error?: string
 }
 
@@ -228,6 +231,7 @@ function Guardado({
       )}
       <Link href={`/movimientos?cuenta=${cuenta.id}`}>Ver los movimientos de la cuenta</Link>. Lote{' '}
       <code>{corto(batchId)}</code>: se deshace entero desde el historial de abajo.
+      <ResumenDeClasificacion clasificacion={respuesta.clasificacion} cuentaId={cuenta.id} />
     </div>
   )
 }

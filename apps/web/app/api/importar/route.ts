@@ -20,6 +20,7 @@
 
 import { accountBalances, persistImport, type TenantClient } from '@moneypilot/db'
 import { NextResponse } from 'next/server'
+import { type ClasificacionDelLote, clasificarLote, SIN_CLASIFICAR } from '@/lib/clasificar'
 import { writeHousehold } from '@/lib/data'
 import {
   conNombreDeCuenta,
@@ -58,6 +59,8 @@ interface Salida {
   readonly cuenta: CuentaElegible
   readonly review: { lineNumber: number; bookedOn: string; description: string }[]
   readonly transfers: { from: string; to: string; on: string; confidence: string }[]
+  /** Qué hizo el motor con lo que acaba de entrar. Ver `clasificarLote`. */
+  readonly clasificacion: ClasificacionDelLote
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -200,10 +203,26 @@ async function importar(
     }),
   )
 
+  // Después de persistir y nunca antes: el motor clasifica asientos, y hasta
+  // acá no había ninguno. Va dentro de un savepoint (ver `clasificarLote`), así
+  // que si algo revienta el lote sigue guardado y el informe lo cuenta.
+  //
+  // Reimportar un fichero ya cargado no vuelve a clasificar: no entró nada
+  // nuevo, y pasarle los asientos del lote anterior sería reabrir decisiones
+  // que quizá una persona ya corrigió a mano.
+  const clasificacion = guardado.skippedByContentHash
+    ? SIN_CLASIFICAR
+    : await clasificarLote(client, {
+        batchId: guardado.batchId,
+        statements: result.statements,
+        classified: result.classified,
+      })
+
   return {
     kind: 'ok',
     salida: {
       report,
+      clasificacion,
       batchId: guardado.batchId,
       guardado: !guardado.skippedByContentHash,
       imported: guardado.imported,

@@ -476,6 +476,11 @@ export async function asentarLectura(
       accountId: cuenta.accountId,
       statement,
       format: 'plaid',
+      // Plaid manda `personal_finance_category` en cada movimiento y el
+      // mapeador la guarda en el `raw`. Declararlo acá es lo que permite que la
+      // capa del proveedor la traduzca: sin esto, la etiqueta viaja hasta el
+      // libro y no la lee nadie.
+      enriquecidoPor: PROVEEDOR,
       fileName: nombreDelLote(nuestra.name, cuenta.externalAccountId),
       // La lista entera a cada cuenta: `removed` no dice de qué cuenta era cada
       // identificador —Plaid lo documenta como opcional y suele venir vacío— y

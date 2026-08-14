@@ -20,10 +20,13 @@ import {
   categoryTree,
   type DimensionSummary,
   dimensionsWithValues,
+  type Explicacion,
+  explicarClasificacion,
   type MovementRow,
   movements,
 } from '@moneypilot/db'
 import Link from 'next/link'
+import { etiquetaDeCapa, nombreDeCapa } from '@/lib/capas'
 import { currentMonthPeriod, readHousehold, today } from '@/lib/data'
 import { formatDate } from '@/lib/format'
 import { navItem } from '@/lib/nav'
@@ -109,6 +112,15 @@ export default async function MovimientosPage({
       completa ? pagina.rows : null,
     )
 
+    // De dónde salió la categoría de cada fila de ESTA página, y nada más: la
+    // explicación se lee al lado del movimiento, así que traerla para todo el
+    // registro sería pagar una consulta sobre miles de filas para enseñar
+    // cincuenta.
+    const porQue = await explicarClasificacion(
+      client,
+      pagina.rows.map((row) => row.entryId),
+    )
+
     return {
       pagina,
       cuentas,
@@ -118,11 +130,12 @@ export default async function MovimientosPage({
       resumen,
       bolsas,
       sinCategorizar,
+      porQue,
     }
   })
 
   const { pagina, cuentas, categorias, dimensiones, conTraspasos, resumen } = data
-  const { bolsas, sinCategorizar } = data
+  const { bolsas, sinCategorizar, porQue } = data
   const moneda = session.baseCurrency
   const nav = navItem('/movimientos')
   const cabecera =
@@ -376,6 +389,7 @@ export default async function MovimientosPage({
                         f={f}
                         moneda={moneda}
                         sinCategorizar={row.categoryId !== null && enBolsa.has(row.categoryId)}
+                        porQue={porQue.get(row.entryId) ?? null}
                       />
                     ))}
                   </tbody>
@@ -472,12 +486,15 @@ function Fila({
   f,
   moneda,
   sinCategorizar,
+  porQue,
 }: {
   row: MovementRow
   f: Filtros
   moneda: string
   /** Su contrapartida es una de las bolsas del importador. */
   sinCategorizar: boolean
+  /** La última decisión de categoría que sigue en pie, o `null`. */
+  porQue: Explicacion | null
 }) {
   const enBase = enMoneda(row, moneda)
 
@@ -569,9 +586,12 @@ function Fila({
             {row.isTransfer ? 'traspaso interno' : 'sin contrapartida'}
           </span>
         ) : (
-          <Link className={styles.pivote} href={ruta(mas(f, 'categorias', row.categoryId))}>
-            {row.category}
-          </Link>
+          <>
+            <Link className={styles.pivote} href={ruta(mas(f, 'categorias', row.categoryId))}>
+              {row.category}
+            </Link>
+            <PorQue explicacion={porQue} />
+          </>
         )}
       </td>
 
@@ -619,6 +639,44 @@ function Fila({
           ))}
       </td>
     </tr>
+  )
+}
+
+/**
+ * De dónde salió esta categoría.
+ *
+ * Sólo aparece cuando la puso el motor. Lo que decidió una persona no lleva
+ * marca a propósito: es el caso normal, y marcarlo todo convertiría la columna
+ * en ruido y la marca en algo que nadie mira. Que la ausencia signifique «lo
+ * pusiste vos» es información, y es la misma convención que sigue la columna
+ * `procedencia` en la base — donde el nulo es una persona.
+ *
+ * El motivo entero va en el `title` y no en la fila: son dos o tres frases con
+ * números dentro, y cincuenta de ellas por pantalla taparían la tabla. Lo que
+ * sí se ve siempre es **qué capa fue**, que es la mitad de la respuesta y la
+ * que hace falta para saber dónde ir a cambiarlo — a la regla, o a
+ * reclasificarlo para que la memoria aprenda.
+ */
+function PorQue({ explicacion }: { explicacion: Explicacion | null }) {
+  if (explicacion === null || explicacion.procedencia === null) return null
+
+  const detalle =
+    explicacion.motivo ??
+    // Las filas escritas antes de la migración 010 no llevan motivo. Decirlo es
+    // mejor que dejar el hueco: el usuario ve la marca y no entiende por qué no
+    // se puede desplegar.
+    `Lo puso ${nombreDeCapa(explicacion.procedencia)}. Este cambio es anterior a que se guardara la explicación completa.`
+
+  return (
+    <div className={`small ${styles.porque}`}>
+      <span title={detalle}>{etiquetaDeCapa(explicacion.procedencia)}</span>
+      {explicacion.regla !== null && explicacion.ruleId !== null && (
+        <>
+          {': '}
+          <Link href={`/reglas/${explicacion.ruleId}`}>{explicacion.regla}</Link>
+        </>
+      )}
+    </div>
   )
 }
 

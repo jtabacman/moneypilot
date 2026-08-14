@@ -73,6 +73,7 @@ import {
   type TenantClient,
   updateBookedTransaction,
 } from '@moneypilot/db'
+import { type ClasificacionDelLote, clasificarLote, SIN_CLASIFICAR } from '../clasificar'
 import { conNombreDeCuenta, existingForAccount, toPersistInput } from '../importacion'
 import { type PipelineResult, runStatements, toWireReport, type WireReport } from '../pipeline'
 import { aperturaNecesaria, conAvisoDeApertura } from './apertura'
@@ -132,6 +133,8 @@ export interface CuentaSincronizada {
   readonly review: readonly FilaEnRevision[]
   readonly apertura: AperturaDelLote | null
   readonly anulados: readonly AnulacionDelLote[]
+  /** Qué hizo el motor de clasificación con lo que acaba de entrar. */
+  readonly clasificacion: ClasificacionDelLote
 }
 
 export interface CuentaVacia {
@@ -167,6 +170,15 @@ export interface AsentarExtractoInput {
    * es el estado normal de todo lo demás.
    */
   readonly retirados?: readonly string[]
+  /**
+   * Quién enriqueció los movimientos, cuando el feed trae su propia taxonomía.
+   *
+   * Es opcional y no se deduce de `provider` a propósito: `FeedProvider` dice
+   * de dónde vino la conexión y esto dice de quién es la etiqueta que hay en el
+   * `raw`. Hoy coinciden; el día que un feed traiga el enriquecimiento de otro
+   * —o no traiga ninguno— deducirlo habría traducido con la tabla equivocada.
+   */
+  readonly enriquecidoPor?: 'plaid' | undefined
 }
 
 export async function asentarExtracto(
@@ -362,8 +374,25 @@ export async function asentarExtracto(
     }
   }
 
+  // Después de persistir y nunca antes: hasta acá no había asientos que
+  // clasificar. Va dentro de un savepoint (ver `clasificarLote`), así que si
+  // algo revienta, la sincronización entera —lote, apertura, cursor— sigue en
+  // pie y el informe cuenta que la clasificación no anduvo.
+  //
+  // Un lote que ya estaba (mismo hash de contenido) no se vuelve a clasificar:
+  // no entró nada nuevo y sus asientos pueden llevar meses corregidos a mano.
+  const clasificacion = guardado.skippedByContentHash
+    ? SIN_CLASIFICAR
+    : await clasificarLote(client, {
+        batchId: guardado.batchId,
+        statements: [statement],
+        classified: resultado.classified,
+        ...(input.enriquecidoPor === undefined ? {} : { proveedor: input.enriquecidoPor }),
+      })
+
   return {
     kind: 'ok',
+    clasificacion,
     externalAccountId: input.externalAccountId,
     accountId: input.accountId,
     nombreDeCuenta: nuestra.name,
