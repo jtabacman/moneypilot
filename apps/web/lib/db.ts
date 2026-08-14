@@ -8,7 +8,7 @@
 
 import 'server-only'
 
-import { createPool, type Db, type TenantClient, withTenant } from '@moneypilot/db'
+import { createPool, type Db, type TenantClient, withTenant, withUserScope } from '@moneypilot/db'
 import { databaseUrl } from './env'
 
 let pool: Db | null = null
@@ -40,4 +40,24 @@ export async function withHousehold<T>(
   fn: (client: TenantClient) => Promise<T>,
 ): Promise<T> {
   return withTenant(getPool(), tenantId, fn, { userId })
+}
+
+/**
+ * El mismo pool, con alcance de **usuario** y no de hogar.
+ *
+ * Lo necesita la resolución de sesión, que corre antes de saber a qué hogar
+ * pertenece nadie. Antes se abría un pool nuevo cada vez y se destruía al
+ * terminar: una conexión TCP y un handshake TLS contra Supabase por cada
+ * página, dos o tres veces si la sesión se resolvía más de una vez. En local
+ * eran dos milisegundos; contra Supabase desde Vercel, cientos.
+ *
+ * Reutilizar el pool no relaja el aislamiento: `withUserScope` degrada el rol y
+ * fija `app.user_id` con alcance de transacción igual que antes, así que la
+ * conexión vuelve al pool sin recordar de quién era.
+ */
+export async function withUser<T>(
+  userId: string,
+  fn: (client: TenantClient) => Promise<T>,
+): Promise<T> {
+  return withUserScope(getPool(), userId, fn)
 }

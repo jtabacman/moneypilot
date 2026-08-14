@@ -7,8 +7,9 @@
 
 import 'server-only'
 
-import { createPool, instalarPlanDeCuentas, withUserScope } from '@moneypilot/db'
-import { databaseUrl } from './env'
+import { instalarPlanDeCuentas } from '@moneypilot/db'
+import { cache } from 'react'
+import { withUser } from './db'
 import { type AuthUser, currentUser } from './supabase/server'
 
 export interface Session {
@@ -43,7 +44,19 @@ interface MembershipRow {
 }
 
 /**
- * Resuelve el estado completo.
+ * Resuelve el estado completo, **una sola vez por petición**.
+ *
+ * El `cache` de React no es una optimización cosmética acá: sin él esto corría
+ * dos y tres veces por página —una en el layout, otra dentro de cada
+ * `readHousehold` o `writeHousehold`— y **cada vez pedía el usuario a Supabase
+ * Auth por HTTP y abría su propia conexión a Postgres**. En local no se notaba;
+ * contra Supabase desde Vercel, cada una de esas repeticiones costaba entre
+ * doscientos y seiscientos milisegundos, y era la mitad de los cuatro segundos
+ * que tardaba una pantalla en aparecer.
+ *
+ * El alcance del `cache` es la petición, no el proceso: dos personas distintas
+ * nunca comparten resultado, que es lo único que haría de esto un fallo grave
+ * en vez de una mejora.
  *
  * El alta del hogar ocurre acá, en el primer acceso, y no en el registro. La
  * razón es concreta: con confirmación por correo, entre "me registré" y "entré"
@@ -53,25 +66,22 @@ interface MembershipRow {
  * `provision_household` es idempotente, así que llamarla en cada primer acceso
  * es correcto aunque sea innecesario a partir de la segunda vez.
  */
-export async function resolveSession(): Promise<SessionState> {
+export const resolveSession = cache(async (): Promise<SessionState> => {
   const previa = sesionDeVistaPrevia()
   if (previa !== null) return previa
 
   const user = await currentUser()
   if (user === null) return { kind: 'anonymous' }
 
-  // Sin hogar todavía, pero con persona: `withUserScope` degrada el rol y
-  // fija `app.user_id`, así que la policy `membership_own` filtra en la base y
-  // no depende de que el `where` de abajo esté bien escrito.
-  const pool = createPool({ connectionString: databaseUrl(), max: 2 })
-
-  try {
-    return await withUserScope(pool, user.id, async (client) => {
-      // Se piden también las caducadas, y se ordena poniendo las activas
-      // primero. Traer sólo las activas haría indistinguibles "nunca tuvo
-      // hogar" y "se le acabó el acceso", que llevan a acciones opuestas.
-      const { rows } = await client.query<MembershipRow>(
-        `select m.tenant_id,
+  // Sin hogar todavía, pero con persona: `withUser` degrada el rol y fija
+  // `app.user_id`, así que la policy `membership_own` filtra en la base y no
+  // depende de que el `where` de abajo esté bien escrito.
+  return withUser(user.id, async (client) => {
+    // Se piden también las caducadas, y se ordena poniendo las activas
+    // primero. Traer sólo las activas haría indistinguibles "nunca tuvo
+    // hogar" y "se le acabó el acceso", que llevan a acciones opuestas.
+    const { rows } = await client.query<MembershipRow>(
+      `select m.tenant_id,
                 t.name,
                 t.base_currency,
                 m.role,
@@ -82,68 +92,65 @@ export async function resolveSession(): Promise<SessionState> {
             and m.revoked_at is null
           order by activa desc, m.created_at
           limit 1`,
-        [user.id],
-      )
+      [user.id],
+    )
 
-      const found = rows[0]
+    const found = rows[0]
 
-      if (found !== undefined && !found.activa) return { kind: 'expired', user } as const
+    if (found !== undefined && !found.activa) return { kind: 'expired', user } as const
 
-      if (found !== undefined) {
-        return {
-          kind: 'active',
-          session: {
-            user,
-            tenantId: found.tenant_id,
-            // `left join`: si la policy de tenant no dejara ver la fila, es
-            // preferible una sesión con el nombre en blanco que ninguna.
-            householdName: found.name ?? 'Mi hogar',
-            baseCurrency: found.base_currency ?? 'EUR',
-            role: found.role,
-          },
-        } as const
-      }
-
-      const created = await client.query<{ provision_household: string }>(
-        'select provision_household($1, $2, $3, $4)',
-        [user.id, user.email, defaultHouseholdName(user.email), 'EUR'],
-      )
-      const tenantId = created.rows[0]?.provision_household
-      if (tenantId === undefined) throw new Error('No se pudo crear el hogar.')
-
-      // El plan de cuentas, en el acto y no cuando alguien se acuerde.
-      //
-      // Sin categorías el motor de clasificación propone y no puede aplicar:
-      // resuelve la ruta contra las cuentas del hogar y no encuentra ninguna.
-      // Un hogar recién creado que conecta su banco vería las cinco capas
-      // trabajar y todos sus movimientos en "Sin categorizar", y el motor
-      // parecería roto cuando lo que falta es el sitio donde escribir.
-      //
-      // Va en la misma transacción que el alta: o hay hogar con plan, o no hay
-      // hogar. Un hogar a medio provisionar es peor que ninguno, porque nada
-      // en la aplicación vuelve a mirarlo.
-      //
-      // `app.tenant_id` se fija acá con el tercer argumento en `true`, que lo
-      // ata a la transacción: al cerrarla desaparece y la conexión vuelve al
-      // pool sin recordar el hogar de nadie.
-      await client.query('select set_config($1, $2, true)', ['app.tenant_id', tenantId])
-      await instalarPlanDeCuentas(client)
-
+    if (found !== undefined) {
       return {
         kind: 'active',
         session: {
           user,
-          tenantId,
-          householdName: defaultHouseholdName(user.email),
-          baseCurrency: 'EUR',
-          role: 'titular',
+          tenantId: found.tenant_id,
+          // `left join`: si la policy de tenant no dejara ver la fila, es
+          // preferible una sesión con el nombre en blanco que ninguna.
+          householdName: found.name ?? 'Mi hogar',
+          baseCurrency: found.base_currency ?? 'EUR',
+          role: found.role,
         },
       } as const
-    })
-  } finally {
-    await pool.end()
-  }
-}
+    }
+
+    const created = await client.query<{ provision_household: string }>(
+      'select provision_household($1, $2, $3, $4)',
+      [user.id, user.email, defaultHouseholdName(user.email), 'EUR'],
+    )
+    const tenantId = created.rows[0]?.provision_household
+    if (tenantId === undefined) throw new Error('No se pudo crear el hogar.')
+
+    // El plan de cuentas, en el acto y no cuando alguien se acuerde.
+    //
+    // Sin categorías el motor de clasificación propone y no puede aplicar:
+    // resuelve la ruta contra las cuentas del hogar y no encuentra ninguna.
+    // Un hogar recién creado que conecta su banco vería las cinco capas
+    // trabajar y todos sus movimientos en "Sin categorizar", y el motor
+    // parecería roto cuando lo que falta es el sitio donde escribir.
+    //
+    // Va en la misma transacción que el alta: o hay hogar con plan, o no hay
+    // hogar. Un hogar a medio provisionar es peor que ninguno, porque nada
+    // en la aplicación vuelve a mirarlo.
+    //
+    // `app.tenant_id` se fija acá con el tercer argumento en `true`, que lo
+    // ata a la transacción: al cerrarla desaparece y la conexión vuelve al
+    // pool sin recordar el hogar de nadie.
+    await client.query('select set_config($1, $2, true)', ['app.tenant_id', tenantId])
+    await instalarPlanDeCuentas(client)
+
+    return {
+      kind: 'active',
+      session: {
+        user,
+        tenantId,
+        householdName: defaultHouseholdName(user.email),
+        baseCurrency: 'EUR',
+        role: 'titular',
+      },
+    } as const
+  })
+})
 
 /** Atajo para las pantallas a las que sólo les importa si hay sesión. */
 export async function currentSession(): Promise<Session | null> {
