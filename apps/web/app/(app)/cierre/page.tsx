@@ -397,7 +397,11 @@ export default async function Cierre({
   const baseIncompleta =
     data.mesAnterior.unconverted === 0 ? null : (
       <p className="sub">
-        <Coverage unconverted={data.mesAnterior.unconverted} currency={data.moneda} />
+        <Coverage
+          unconverted={data.mesAnterior.unconverted}
+          currency={data.moneda}
+          alcance="del mes anterior"
+        />
       </p>
     )
   /**
@@ -523,7 +527,11 @@ export default async function Cierre({
               <h2>{capitalize(formatMonth(mes))}</h2>
             </div>
             <div className="actions">
-              <Coverage unconverted={data.mesActual.unconverted} currency={data.moneda} />
+              <Coverage
+                unconverted={data.mesActual.unconverted}
+                currency={data.moneda}
+                alcance="de este mes"
+              />
             </div>
           </div>
 
@@ -777,6 +785,7 @@ export default async function Cierre({
               <Coverage
                 unconverted={data.mesActual.unconverted}
                 currency={data.moneda}
+                alcance="de este mes"
                 extra={`${data.mesActual.transactions} operaciones`}
               />
               <Link className="btn quiet" href={aMovimientos({ desde: from, hasta: to })}>
@@ -834,7 +843,11 @@ export default async function Cierre({
                   del mes de arriba no dice nada de los once meses anteriores. */}
               {data.acumulado.unconverted > 0 && (
                 <p className="sub">
-                  <Coverage unconverted={data.acumulado.unconverted} currency={data.moneda} />
+                  <Coverage
+                    unconverted={data.acumulado.unconverted}
+                    currency={data.moneda}
+                    alcance="del acumulado del año"
+                  />
                 </p>
               )}
             </div>

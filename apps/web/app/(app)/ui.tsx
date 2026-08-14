@@ -163,15 +163,35 @@ export function Illustrative({ children }: { children: ReactNode }) {
  * fuera por no poder convertirlos, hay que decirlo junto a la cifra y no en
  * una nota al pie que nadie lee.
  */
+/**
+ * El hueco declarado: cuánto se queda fuera del consolidado por falta de tasa.
+ *
+ * ── Por qué ahora dice de qué habla ─────────────────────────────────────────
+ *
+ * En /cierre este chip salía **cinco veces con tres cifras distintas** —7, 7, 5,
+ * 5 y 15— y en /estructura tres veces con otras tres. Ninguna estaba mal: cada
+ * panel mide su propio trozo, el mes anterior mide el mes anterior y el
+ * acumulado mide el acumulado. Pero cinco chips idénticos con números que no
+ * cuadran entre sí se leen como un error del producto, no como cinco
+ * afirmaciones verdaderas sobre cinco cosas distintas.
+ *
+ * El chip no sobra —es la regla del hueco declarado, y sin él la pantalla
+ * enseñaría un consolidado incompleto sin decirlo—. Lo que faltaba es el
+ * `alcance`: de qué trozo habla cada uno.
+ */
 export function Coverage({
   unconverted,
   currency,
   extra,
+  alcance,
 }: {
   unconverted: number
   currency: string
   extra?: string
+  /** De qué habla este chip: «en este mes», «en el acumulado», «en el período». */
+  alcance?: string
 }) {
+  const donde = alcance === undefined ? '' : ` ${alcance}`
   if (unconverted === 0) {
     return (
       <span className="small faint">
@@ -182,8 +202,9 @@ export function Coverage({
   }
   return (
     <span className="status warn">
-      {unconverted} {unconverted === 1 ? 'movimiento queda' : 'movimientos quedan'} fuera del
-      consolidado en {currency}: falta su tipo de cambio
+      {unconverted} {unconverted === 1 ? 'movimiento' : 'movimientos'}
+      {donde} {unconverted === 1 ? 'queda' : 'quedan'} fuera del consolidado en {currency}: falta su
+      tipo de cambio
     </span>
   )
 }

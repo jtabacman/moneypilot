@@ -103,7 +103,7 @@ export default async function ReglasPage() {
           eso una regla se puede parar.
         </p>
 
-        <PorCapa yaHecho={yaHecho} enSeco={enSeco} />
+        <PorCapa yaHecho={yaHecho} enSeco={enSeco} sinCategorizar={pendiente.total} />
 
         <div className="panel">
           <div className="panel-head">
@@ -111,7 +111,7 @@ export default async function ReglasPage() {
             <small>
               {pendiente.total === 0
                 ? 'nada sin categorizar'
-                : `${pendiente.total} ${pendiente.total === 1 ? 'movimiento' : 'movimientos'} sin categorizar`}
+                : `${pendiente.total} ${pendiente.total === 1 ? 'movimiento' : 'movimientos'} sin categorizar, sin contar traspasos`}
             </small>
           </div>
 
@@ -355,9 +355,12 @@ export default async function ReglasPage() {
 function PorCapa({
   yaHecho,
   enSeco,
+  sinCategorizar,
 }: {
   yaHecho: readonly ClasificadoPorCapa[]
   enSeco: ClasificacionAutomatica
+  /** El total de la pantalla, para que las dos cifras se relacionen. */
+  sinCategorizar: number
 }) {
   const puesto = new Map(yaHecho.map((fila) => [fila.procedencia, fila.movimientos]))
   const propone = new Map(enSeco.porCapa.map((capa) => [capa.procedencia, capa]))
@@ -455,9 +458,16 @@ function PorCapa({
           </li>
           {enSeco.sinPropuesta > 0 && (
             <li>
-              Hay <b>{enSeco.sinPropuesta}</b> movimientos sin categorizar sobre los que ninguna
-              capa tiene nada que decir. Ésos se arreglan con una regla, o clasificándolos a mano
-              tres veces para que la memoria los aprenda.
+              {/* Los dos números son distintos y uno es parte del otro: se dice
+                  así. Antes esta pantalla enseñaba «72 sin categorizar» arriba
+                  y «39 sin categorizar» veinte líneas después, sin decir que los
+                  39 son un subconjunto de los 72 — y dos cifras que no cuadran
+                  en la misma pantalla se leen como un error, no como dos
+                  preguntas distintas. */}
+              De esos {sinCategorizar}, sobre <b>{enSeco.sinPropuesta}</b> no tiene nada que decir
+              ninguna de las cinco capas. Ésos se arreglan con una regla, o clasificándolos a mano
+              tres veces para que la memoria los aprenda. Los {sinCategorizar - enSeco.sinPropuesta}{' '}
+              restantes ya tienen una propuesta esperando en <Link href="/revisar">Revisar</Link>.
             </li>
           )}
         </ul>

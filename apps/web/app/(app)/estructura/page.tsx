@@ -171,7 +171,11 @@ export default async function EstructuraPage() {
             </div>
           </div>
           <div className="panel-foot">
-            <Coverage unconverted={sinConvertir} currency={base} />
+            <Coverage
+              unconverted={sinConvertir}
+              currency={base}
+              alcance="en los últimos 12 meses"
+            />
           </div>
         </section>
 
@@ -241,7 +245,7 @@ function SeriePanel({ serie, base }: { serie: readonly NetWorthPoint[]; base: st
             deuda.
           </small>
         </div>
-        <Coverage unconverted={ultimo?.unconverted ?? 0} currency={base} />
+        <Coverage unconverted={ultimo?.unconverted ?? 0} currency={base} alcance="del último mes" />
       </div>
 
       <div className="panel-body">
@@ -402,7 +406,7 @@ function WaterfallPanel({
             Inicio + aportes − gastos + revalorización + FX = cierre. Cierra al céntimo.
           </small>
         </div>
-        <Coverage unconverted={atribucion.unconverted} currency={base} />
+        <Coverage unconverted={atribucion.unconverted} currency={base} alcance="del período" />
       </div>
 
       <div className="panel-body">
@@ -544,7 +548,7 @@ function ComposicionPanel({
           <h2>{titulo}</h2>
           <small>{explica}</small>
         </div>
-        <Coverage unconverted={sinConvertir} currency={base} />
+        <Coverage unconverted={sinConvertir} currency={base} alcance="en los últimos 12 meses" />
       </div>
 
       {filas.length === 0 ? (

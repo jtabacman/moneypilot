@@ -739,14 +739,6 @@ function Conexiones({ cuentas, hoy }: { cuentas: readonly AccountBalance[]; hoy:
         </small>
       </div>
 
-      <div className="panel-body">
-        <div className="notice">
-          <b>Todavía no hay conexiones bancarias automáticas.</b> Todo entra por archivo importado,
-          así que no hay un estado de conexión que consultar. Lo que sí se puede medir —y es la
-          misma pregunta— es hace cuánto que no entra un movimiento en cada cuenta.
-        </div>
-      </div>
-
       {filas.length === 0 ? (
         <Empty title="No queda ninguna cuenta abierta">
           Hay movimientos en el libro, pero todas las cuentas de dinero están cerradas. Mientras sea

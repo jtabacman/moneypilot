@@ -209,7 +209,13 @@ export default async function MovimientosPage({
         <div className="panel">
           <div className="panel-head">
             <h2>{hayFiltros(f) ? 'Resumen del filtro' : 'Todo el registro'}</h2>
-            {resumen !== null && <Coverage unconverted={resumen.sinConvertir} currency={moneda} />}
+            {resumen !== null && (
+              <Coverage
+                unconverted={resumen.sinConvertir}
+                currency={moneda}
+                alcance="de este filtro"
+              />
+            )}
           </div>
 
           {resumen === null ? (

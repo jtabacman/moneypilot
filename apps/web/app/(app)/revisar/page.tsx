@@ -80,6 +80,11 @@ export default async function RevisarPage() {
   // que preguntar. Lo que llega acá es lo que espera criterio.
   const propuestas = data.clasificacion.propuestas.filter((p) => !p.automatica)
   const nombreDeCategoria = new Map(data.categorias.map((c) => [c.id, c.path]))
+  // El chip de la cabecera suma las dos colas, así que tiene que nombrarlas a
+  // las dos. Antes decía «16 pendientes» y el panel llamado «Pendientes» decía
+  // «0 ítems · Nada pendiente» justo debajo: el mismo sustantivo para dos cosas
+  // distintas, y un contador que no cuadra con la tabla que tiene al lado
+  // destruye la confianza en todos los demás contadores del producto.
   const porDecidir = pendientes.length + propuestas.length
 
   // Por qué se comprueba acá y no se esconde el botón: B6. El motivo viaja
@@ -95,7 +100,7 @@ export default async function RevisarPage() {
         tools={
           porDecidir > 0 ? (
             <span className="status warn">
-              {porDecidir} {porDecidir === 1 ? 'pendiente' : 'pendientes'}
+              {porDecidir} {porDecidir === 1 ? 'decisión' : 'decisiones'}
             </span>
           ) : undefined
         }
@@ -108,19 +113,22 @@ export default async function RevisarPage() {
           <>
             <PorQue />
 
-            <Cola
-              titulo="Pendientes"
-              descripcion="Cada fila espera una decisión tuya. Mientras tanto, el movimiento cuenta tal como entró."
-              filas={pendientes}
-              cuentas={indice}
-              accionable
-              motivo={motivo}
-              vacio={
-                propuestas.length > 0
-                  ? 'Nada dudoso en la deduplicación. Las categorías que el motor propone están más abajo.'
-                  : 'Ninguna fila quedó dudosa al deduplicar. Cuando el motor no se anime a descartar algo, lo va a dejar acá.'
-              }
-            />
+            {/* Cuando la cola del dedup está vacía y hay propuestas debajo, el
+                panel no se dibuja: ocupaba 214 px para decir que no hay nada,
+                justo encima de las 16 decisiones que sí hay. Si no hay ninguna
+                de las dos cosas, sí se dibuja — «no queda nada por decidir» es
+                una respuesta y hay que darla. */}
+            {(pendientes.length > 0 || propuestas.length === 0) && (
+              <Cola
+                titulo="Dudas al deduplicar"
+                descripcion="Cada fila espera una decisión tuya. Mientras tanto, el movimiento cuenta tal como entró."
+                filas={pendientes}
+                cuentas={indice}
+                accionable
+                motivo={motivo}
+                vacio="Ninguna fila quedó dudosa al deduplicar. Cuando el motor no se anime a descartar algo, lo va a dejar acá."
+              />
+            )}
 
             <Propuestas
               filas={propuestas}
