@@ -3,10 +3,8 @@
  *
  * ── Por qué es una lista escrita a mano y no una búsqueda ───────────────────
  *
- * Con finAPI el catálogo se pide por la red porque sus bancos de prueba son
- * inventados y hay que descubrirlos. Acá el problema es el contrario: el
- * catálogo de Plaid tiene 10.097 instituciones en EE. UU. y 78 en España, y una
- * lista de diez mil bancos no es un selector, es un buscador — y un buscador
+ * El catálogo de Plaid tiene 10.097 instituciones en EE. UU. y 78 en España, y
+ * una lista de diez mil bancos no es un selector, es un buscador — y un buscador
  * para elegir un banco de prueba es trabajo que no le sirve a nadie.
  *
  * Así que se eligen unas pocas y se dice de dónde salieron. Los identificadores
@@ -19,17 +17,18 @@
  *
  * BBVA, CaixaBank, Santander y Chase de esta lista **son las entidades de
  * verdad**, con su identificador de producción. Lo simulado son las cuentas y
- * los movimientos que el sandbox genera detrás. Con finAPI la confusión era
- * imposible —los bancos se llamaban "FinAPI Test Bank"—; acá alguien puede leer
- * "BBVA · Plaid Current Account" en su lista de cuentas dentro de un mes y creer
- * que conectó su banco. Por eso el aviso de la pantalla insiste en esto y no
- * sólo en que el dinero no existe.
+ * los movimientos que hay detrás. Alguien puede leer "BBVA · Banca Personal"
+ * en su lista de cuentas dentro de un mes y creer que conectó su banco; por eso
+ * el aviso de la pantalla insiste en esto y no sólo en que el dinero no existe.
  *
- * Y hay un dato medido que decide el orden: **BBVA devuelve cuentas en euros**.
- * El banco de prueba clásico de Plaid (First Platypus) las da en dólares, lo
- * que en un producto cuyo corredor es España obliga a mirar un patrimonio en
- * una moneda que no es la del hogar. Con BBVA la demo se ve como se va a ver de
- * verdad: seis cuentas en EUR, corriente, ahorro, dos tarjetas y una hipoteca.
+ * ── Tres de ellas traen un hogar escrito por nosotros ───────────────────────
+ *
+ * BBVA, CaixaBank y Chase se conectan con el usuario a medida de
+ * `hogar-de-prueba.ts`: cuentas y movimientos españoles, de un único hogar, con
+ * traspasos entre sus propias cuentas. Las otras tres se conectan con el usuario
+ * por defecto de Plaid, que devuelve datos suyos —estadounidenses y genéricos—.
+ * Eso no es un hueco: es el grupo de control contra descriptores que no
+ * escribimos nosotros, y es donde se ve qué hace el motor con lo desconocido.
  */
 
 export interface InstitucionDePrueba {
@@ -53,7 +52,7 @@ export const INSTITUCIONES_DE_PRUEBA: readonly InstitucionDePrueba[] = [
     pais: 'ES',
     moneda: 'EUR',
     real: true,
-    nota: 'Seis cuentas en euros: corriente, ahorro, empresa, dos tarjetas y una hipoteca. Es la más parecida a lo que va a ver un hogar español.',
+    nota: 'La cuenta del día a día: nómina, hipoteca, Iberdrola, Movistar, colegio, IBI y el IRPF trimestral. 29 movimientos en euros.',
   },
   {
     id: 'ins_76',
@@ -61,7 +60,7 @@ export const INSTITUCIONES_DE_PRUEBA: readonly InstitucionDePrueba[] = [
     pais: 'ES',
     moneda: 'EUR',
     real: true,
-    nota: 'Entidad española real, autenticación OAuth. Mismas cuentas simuladas en euros.',
+    nota: 'La casa y la tarjeta: seguros, alarma, empleada de hogar, la reforma de la cocina y 13 compras con Mastercard. 27 movimientos en euros, en dos cuentas.',
   },
   {
     id: 'ins_28',
@@ -69,7 +68,7 @@ export const INSTITUCIONES_DE_PRUEBA: readonly InstitucionDePrueba[] = [
     pais: 'US',
     moneda: 'USD',
     real: true,
-    nota: 'La ficha estadounidense de Santander. Sirve para ver el corredor de EE. UU. con un nombre conocido.',
+    nota: 'La ficha estadounidense de Santander, con los datos de ejemplo de Plaid. Grupo de control: descriptores que no escribimos nosotros.',
   },
   {
     id: 'ins_56',
@@ -77,7 +76,7 @@ export const INSTITUCIONES_DE_PRUEBA: readonly InstitucionDePrueba[] = [
     pais: 'US',
     moneda: 'USD',
     real: true,
-    nota: 'El banco más grande de EE. UU., con OAuth. Cuentas simuladas en dólares.',
+    nota: 'La pata estadounidense del mismo hogar: el piso de Miami, con su alquiler cobrado, la comunidad y los suministros. 16 movimientos en dólares.',
   },
   {
     id: 'ins_109508',

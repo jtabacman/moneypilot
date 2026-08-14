@@ -165,8 +165,8 @@ export function ConectarPlaid({
         <div>
           <h2>Conectar un banco por Plaid</h2>
           <p className="small faint">
-            El mismo camino que finAPI, con el proveedor que sí cubre España y Estados Unidos. Entra
-            por el mismo sitio: mismos asientos, mismo informe, mismo botón de deshacer.
+            Un hogar español de tres bancos, en euros y en dólares. Entra por el mismo sitio que un
+            fichero: mismos asientos, mismo informe, mismo botón de deshacer.
           </p>
         </div>
       </div>
@@ -294,32 +294,40 @@ export function ConectarPlaid({
 /* ── El aviso que no se puede esconder ───────────────────────────────────── */
 
 /**
- * Deliberadamente lo primero y deliberadamente largo, igual que el de finAPI —
- * pero con un párrafo más, que es el que allá no hacía falta: los bancos de
- * esta lista existen.
+ * Deliberadamente lo primero y deliberadamente largo.
+ *
+ * Y deliberadamente detallado sobre **qué parte es simulada**, porque acá no
+ * todo lo es: los bancos existen, los descriptores los escribimos nosotros y la
+ * categoría del proveedor sale de su motor de verdad. Un aviso que dijera sólo
+ * "esto es de mentira" sería cómodo y sería falso en dos de las tres capas.
  */
 function NoEsTuDineroPeroSonTusBancos() {
   return (
     <div className="banner">
       <b>Ojo: este dinero no es tuyo y no existe.</b> Lo que se conecta desde acá son{' '}
-      <b>cuentas simuladas del sandbox de Plaid</b>, con movimientos que generan ellos. No son tus
-      cuentas, no hay ningún banco tuyo conectado y nadie va a pedirte tus credenciales reales.
+      <b>cuentas simuladas del sandbox de Plaid</b>. No son tus cuentas, no hay ningún banco tuyo
+      conectado y nadie va a pedirte tus credenciales reales.
       <br />
       <br />
-      <b>
-        Y una diferencia importante con el bloque de finAPI: acá los bancos sí son los de verdad.
-      </b>{' '}
-      BBVA, CaixaBank, Santander y Chase de la lista son las entidades reales, con el mismo
-      identificador que en producción — lo simulado son las cuentas y los movimientos que hay
-      dentro. Eso puede confundir más y no menos: dentro de un mes vas a ver "BBVA · Plaid Current
-      Account" en tu lista de cuentas, y no hay nada en esa fila que diga que es de mentira. Si
-      dudás, el lote está en el historial de abajo y se deshace entero.
+      <b>Los bancos, en cambio, sí son los de verdad.</b> BBVA, CaixaBank, Santander y Chase de la
+      lista son las entidades reales, con el mismo identificador que en producción — lo simulado son
+      las cuentas y los movimientos que hay dentro. Eso puede confundir más y no menos: dentro de un
+      mes vas a ver "BBVA · Banca Personal · Cuenta Corriente" en tu lista de cuentas, y no hay nada
+      en esa fila que diga que es de mentira. Si dudás, el lote está en el historial de abajo y se
+      deshace entero.
       <br />
       <br />
-      Está acá por el mismo motivo que el otro: es un corpus que no escribimos nosotros. Y es el
-      proveedor que sí cubre el corredor del producto — 10.097 instituciones en Estados Unidos y 78
-      en España, con BBVA, Santander, CaixaBank, Sabadell, Bankinter, ING, Openbank, Revolut,
-      Unicaja y Kutxabank ofreciendo movimientos.
+      <b>Los movimientos son un hogar español que escribimos nosotros</b>, no el usuario de ejemplo
+      de Plaid — que devuelve Uber, United Airlines y comisiones en dólares, y no prueba nada de lo
+      que este producto tiene que saber hacer. Acá hay nómina, hipoteca, Iberdrola, Movistar,
+      colegio, IBI, un IRPF trimestral, la reforma de una cocina y un traspaso entre dos cuentas
+      propias. <b>La clasificación del proveedor no la escribimos</b>: los descriptores pasan por el
+      motor de Plaid igual que los de un cliente real, y lo que devuelve —incluidos sus errores— es
+      lo que ves.
+      <br />
+      <br />
+      <b>Son los últimos 90 días.</b> El sandbox descarta lo más viejo, se le pida lo que se le
+      pida. El histórico largo entra por fichero.
     </div>
   )
 }

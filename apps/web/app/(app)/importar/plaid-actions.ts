@@ -34,6 +34,7 @@ import { ID_DE_INSTITUCION, institucionDePrueba } from '@/lib/plaid/catalogo'
 import { crearPublicTokenDeSandbox } from '@/lib/plaid/client'
 import { registrarConexion } from '@/lib/plaid/conexion'
 import { PlaidError } from '@/lib/plaid/errores'
+import { hogarDePrueba } from '@/lib/plaid/hogar-de-prueba'
 
 export interface EstadoConexionPlaid {
   readonly ok: boolean
@@ -88,7 +89,18 @@ export async function conectarPlaid(
         } as const
       }
 
-      const publicToken = await crearPublicTokenDeSandbox(banco.id, ['transactions'])
+      // El usuario por defecto del sandbox devuelve los movimientos de Plaid:
+      // `Uber`, `United Airlines`, `INTRST PYMNT`. Se conecta «BBVA» y se ve la
+      // vida de un americano inventado, que no prueba nada de lo que este
+      // producto tiene que hacer. Con el hogar a medida los descriptores son
+      // españoles y **Plaid los enriquece igual**, así que la categoría que
+      // vuelve es la que le pondría a un cliente de verdad.
+      const hogar = hogarDePrueba(banco.id)
+      const publicToken = await crearPublicTokenDeSandbox(
+        banco.id,
+        ['transactions'],
+        hogar === undefined ? {} : { usuarioAMedida: hogar },
+      )
       const conexion = await registrarConexion(client, {
         publicToken,
         institutionId: banco.id,
