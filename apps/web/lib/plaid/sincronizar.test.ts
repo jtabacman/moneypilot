@@ -258,6 +258,40 @@ suite('sincronización del feed de Plaid', () => {
     ])
   })
 
+  /* ── El nombre de la cuenta ────────────────────────────────────────────── */
+
+  it('el banco no se mete dentro del nombre: para eso está la columna', async () => {
+    // La etiqueta que se vio en pantalla era «BBVA · Banca Personal · BBVA ·
+    // Banca Personal · Cuenta Corriente 0000»: el nombre guardado ya traía el
+    // banco y el selector de importación lo anteponía otra vez. Ninguno de los
+    // dos estaba mal por su cuenta; el dato estaba en dos sitios.
+    plaid.cuentas = [cuenta({ nombre: 'Cuenta Corriente', saldoActual: '0.00' })]
+    plaid.lotes = [
+      lote({
+        added: [movimiento({ id: 'x', importe: '0.00', fecha: '2026-08-01' })],
+        cursor: 'c1',
+      }),
+    ]
+    await sincronizar()
+
+    const fila = await enHogar(async (client) => {
+      const { rows } = await client.query<{ name: string; institution: string | null }>(
+        `select a.name, a.institution
+           from account a
+           join feed_account fa on fa.account_id = a.id
+          where fa.external_account_id = $1`,
+        [CUENTA],
+      )
+      return rows[0]
+    })
+
+    // Los últimos dígitos sí van pegados: distinguen dos cuentas del mismo
+    // banco que si no se llamarían igual.
+    expect(fila?.name).toBe('Cuenta Corriente 0000')
+    expect(fila?.institution).toBe('BBVA · Banca Personal')
+    expect(fila?.name).not.toContain('BBVA')
+  })
+
   it('el saldo del libro cuadra al céntimo con el que declara Plaid', async () => {
     // 0.10 + 0.20 en coma flotante da 0.30000000000000004. Si el importe
     // hubiera pasado por `Number()` en cualquier punto —al leer el JSON, al

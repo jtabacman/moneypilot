@@ -773,6 +773,41 @@ export async function buscarInstituciones(
 }
 
 /**
+ * Una institución por su identificador. La ficha completa, no un resultado de
+ * búsqueda.
+ *
+ * Hace falta para el país. `country_codes` es lo único que Plaid dice de la
+ * jurisdicción de un banco, y no viaja en `/transactions/sync` ni en
+ * `/accounts/get`: hay que pedir la ficha aparte.
+ *
+ * `country_codes` es obligatorio en la petición y no en la respuesta, lo cual
+ * es incómodo: hay que decirle en qué países buscar a la entidad que estás
+ * pidiendo por id. Se le pasan los del corredor declarado; si el banco no
+ * estuviera en ninguno, contesta `INSTITUTION_NOT_FOUND` y quien llama decide
+ * —acá, dejar el país vacío, que es la respuesta honesta.
+ */
+export async function institucionPorId(
+  institutionId: string,
+  paises: readonly string[],
+  opciones: OpcionesRed = {},
+): Promise<InstitucionPlaid> {
+  const json = await pedirJson(
+    '/institutions/get_by_id',
+    { institution_id: institutionId, country_codes: [...paises] },
+    `pedir la ficha de la institución ${institutionId}`,
+    opciones,
+  )
+  const banco = objeto(json['institution'], 'la institución')
+  return {
+    institutionId: cadenaObligatoria(banco, 'institution_id', 'la institución'),
+    nombre: cadena(banco, 'name') ?? '(sin nombre)',
+    paises: textos(banco['country_codes']),
+    productos: textos(banco['products']),
+    oauth: cadena(banco, 'oauth') === 'true',
+  }
+}
+
+/**
  * Cuántas instituciones hay en esos países.
  *
  * Es la comprobación de cobertura que decidió el proveedor: finAPI daba 0

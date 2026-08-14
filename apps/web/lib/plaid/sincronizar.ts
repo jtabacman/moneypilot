@@ -285,6 +285,7 @@ export async function prepararCuentas(
   client: TenantClient,
   conexion: FeedConnectionRow,
   cuentas: readonly CuentaPlaid[],
+  paisDeLaEntidad: string | null = null,
 ): Promise<CuentaDelFeed[]> {
   const plan: CuentaDelFeed[] = []
   for (const cuenta of cuentas) {
@@ -293,7 +294,7 @@ export async function prepararCuentas(
       provider: PROVEEDOR,
       externalAccountId: cuenta.accountId,
       connectionId: conexion.id,
-      name: nombreDe(cuenta, conexion.bankName),
+      name: nombreDe(cuenta),
       kind: claseDe(cuenta.type),
       currency: moneda,
       institution: conexion.bankName,
@@ -301,10 +302,16 @@ export async function prepararCuentas(
       // enmascarador que todos los parsers: si una entidad devolviera algo más
       // largo de lo que promete, no cuela un número de cuenta entero.
       accountNumber: maskAccountNumber(cuenta.mask ?? undefined) ?? null,
-      // Plaid no declara el país de la cuenta. El de la institución sí se
-      // sabe, pero es el país del banco y no el de la cuenta, y en una entidad
-      // que opera en varios no es lo mismo. Se prefiere vacío a inventado.
-      country: null,
+      // Plaid no declara el país de LA CUENTA. Lo que sí dice es en qué países
+      // opera la entidad, y de ahí sale esto — pero sólo cuando opera en uno.
+      //
+      // La distinción no es escrupulosidad: BBVA figura en España, Estados
+      // Unidos y México, y poner 'ES' en una cuenta de BBVA México sería
+      // inventar un dato que después se usa para agrupar patrimonio por país.
+      // Con una sola jurisdicción no hay nada que adivinar; con varias, el
+      // valor honesto es vacío. Ver `paisDeLaEntidad` en la ruta, que es quien
+      // aplica esa regla.
+      country: paisDeLaEntidad,
     })
 
     plan.push({
@@ -389,11 +396,33 @@ function monedaDe(cuenta: CuentaPlaid): string {
   return (declarada ?? 'EUR').trim().toUpperCase()
 }
 
-function nombreDe(cuenta: CuentaPlaid, banco: string): string {
+/**
+ * El nombre de la cuenta, **sin el banco delante**.
+ *
+ * El banco va en `account.institution`, que es una columna, y es de ahí de
+ * donde lo saca quien lo necesite: /cuentas agrupa por ella y el selector de
+ * importación la antepone. Meterlo también dentro del nombre producía la
+ * etiqueta que se vio en pantalla —«BBVA · Banca Personal · BBVA · Banca
+ * Personal · Cuenta Corriente 4444»—, y no por un fallo del selector: dos
+ * sitios guardaban el mismo dato y el que lo componía no tenía forma de saber
+ * que ya venía dentro.
+ *
+ * Los últimos dígitos sí se quedan pegados, y no es lo mismo: distinguen dos
+ * cuentas corrientes del mismo banco, que si no se llamarían igual y acabarían
+ * desambiguadas por `freeAccountName` con el id de Plaid a cuestas.
+ *
+ * Ojo con lo que esto **no** hace: las cuentas creadas antes conservan su
+ * nombre largo, porque el enlace con el proveedor es por
+ * `external_account_id` y `ensureLedgerAccount` ni mira el nombre cuando ya
+ * existe. Es deliberado —renombrarle al cliente una cuenta que ya usa es peor
+ * que la redundancia— y el sitio donde se arregla es la pantalla de cuentas el
+ * día que se pueda renombrar a mano.
+ */
+function nombreDe(cuenta: CuentaPlaid): string {
   const propio = (cuenta.name ?? cuenta.officialName ?? '').trim()
   const base = propio === '' ? `Cuenta ${cuenta.accountId}` : propio
   const mask = (cuenta.mask ?? '').trim()
-  return `${banco} · ${base}${mask === '' ? '' : ` ${mask}`}`
+  return `${base}${mask === '' ? '' : ` ${mask}`}`
 }
 
 /* ── Asentar lo leído ─────────────────────────────────────────────────────── */
@@ -420,6 +449,21 @@ export interface AsentarLecturaInput {
    * mirara, dos ejecuciones sobre el mismo lote darían informes distintos.
    */
   readonly balanceAsOf: string
+  /**
+   * El país de la entidad, si opera en uno solo. Lo resuelve quien llama, en
+   * la fase de red: pedirle la ficha a Plaid desde acá sería una llamada HTTP
+   * con la transacción abierta, que es justo lo que este módulo evita.
+   */
+  readonly paisDeLaEntidad?: string | null
+  /**
+   * El instante en que se preguntó, en ISO 8601 con hora.
+   *
+   * Es el respaldo del saldo del proveedor cuando la entidad no declara el
+   * suyo. Lo pone quien llama por el mismo motivo que `balanceAsOf`: este
+   * módulo no mira el reloj, y si lo mirara dos ejecuciones sobre el mismo lote
+   * darían resultados distintos.
+   */
+  readonly observadoEn?: string | undefined
 }
 
 /**
@@ -438,7 +482,12 @@ export async function asentarLectura(
   const { conexion } = await conexionConToken(client, input.connectionId)
   const { lectura } = input
 
-  const plan = await prepararCuentas(client, conexion, await cuentasAsentables(client, lectura))
+  const plan = await prepararCuentas(
+    client,
+    conexion,
+    await cuentasAsentables(client, lectura),
+    input.paisDeLaEntidad ?? null,
+  )
   const conocidas = new Set(plan.map((cuenta) => cuenta.externalAccountId))
 
   // Un movimiento de una cuenta que no vino en la lectura no se puede asentar
@@ -469,6 +518,19 @@ export async function asentarLectura(
       { fallbackCurrency: nuestra.currency, balanceAsOf: input.balanceAsOf },
     )
 
+    // El instante del saldo. Se prefiere el que declara la entidad —«el banco
+    // dijo esto a las 14:03»— y se cae al nuestro —«lo leímos a las 14:03»—,
+    // que es más flojo y por eso viaja etiquetado como tal.
+    const declarado = instanteDeclarado(cruda)
+    const observadoEn = declarado ?? input.observadoEn
+    const saldoDelProveedor =
+      observadoEn === undefined
+        ? undefined
+        : {
+            observadoEn,
+            origen: (declarado === undefined ? 'lectura' : 'proveedor') as 'proveedor' | 'lectura',
+          }
+
     const resultado = await asentarExtracto(client, {
       provider: PROVEEDOR,
       proveedorLegible: LEGIBLE,
@@ -481,11 +543,12 @@ export async function asentarLectura(
       // capa del proveedor la traduzca: sin esto, la etiqueta viaja hasta el
       // libro y no la lee nadie.
       enriquecidoPor: PROVEEDOR,
-      fileName: nombreDelLote(nuestra.name, cuenta.externalAccountId),
+      fileName: nombreDelLote(nuestra.name, cuenta.externalAccountId, cuenta.institucion),
       // La lista entera a cada cuenta: `removed` no dice de qué cuenta era cada
       // identificador —Plaid lo documenta como opcional y suele venir vacío— y
       // la búsqueda es por cuenta, así que cada una encuentra sólo lo suyo.
       retirados: lectura.retirados,
+      ...(saldoDelProveedor === undefined ? {} : { saldoDelProveedor }),
     })
 
     resultados.push(resultado)
@@ -513,8 +576,34 @@ export async function asentarLectura(
  * ningún fichero, y escribir uno inventado haría que alguien lo buscara en su
  * disco dentro de seis meses.
  */
-function nombreDelLote(nombreDeCuenta: string, externalAccountId: string): string {
+/**
+ * El instante que declara la entidad, si lo declara.
+ *
+ * Vive en el `crudo` porque `CuentaPlaid` no lo expone: el mapeador lo trunca a
+ * día para `StatementBalance.on`, que es un `PlainDate`, y ese truncado es
+ * justamente lo que no sirve para distinguir dos lecturas del mismo día.
+ */
+function instanteDeclarado(cuenta: CuentaPlaid): string | undefined {
+  const valor = cuenta.crudo['balances.last_updated_datetime']
+  if (typeof valor !== 'string' || valor.trim() === '') return undefined
+  // Que sea una fecha de verdad se comprueba acá y no en la base: un
+  // `timestamptz` inválido abortaría la transacción entera de la
+  // sincronización por un dato descriptivo.
+  return Number.isNaN(Date.parse(valor)) ? undefined : valor
+}
+
+function nombreDelLote(
+  nombreDeCuenta: string,
+  externalAccountId: string,
+  banco: string | null,
+): string {
+  // Acá el banco SÍ va delante, y no se contradice con `nombreDe`: esto es la
+  // etiqueta de un lote en el historial de importaciones, que se lee sola y
+  // fuera de cualquier agrupación por institución. «Plaid · Cuenta Corriente
+  // 4444» no dice de qué banco, y el historial es justo donde importa.
+  //
   // Los ocho primeros caracteres del id de Plaid alcanzan para distinguir dos
   // cuentas y no llenan la columna con cuarenta caracteres de ruido.
-  return `Plaid · ${nombreDeCuenta} (cuenta ${externalAccountId.slice(0, 8)})`
+  const entidad = banco === null || banco.trim() === '' ? '' : `${banco} · `
+  return `Plaid · ${entidad}${nombreDeCuenta} (cuenta ${externalAccountId.slice(0, 8)})`
 }

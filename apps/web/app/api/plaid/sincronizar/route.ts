@@ -31,6 +31,7 @@ import { SincronizacionError } from '@/lib/feed/errores'
 import { navItem } from '@/lib/nav'
 import { conexionConToken } from '@/lib/plaid/conexion'
 import { necesitaReautenticacion, PlaidError } from '@/lib/plaid/errores'
+import { paisDeLaEntidad } from '@/lib/plaid/pais'
 import { asentarLectura, leerDelItem, type ResultadoDelItem } from '@/lib/plaid/sincronizar'
 import { resolveSession } from '@/lib/session'
 
@@ -100,8 +101,11 @@ async function sincronizar(conexionId: string): Promise<ResultadoDelItem> {
     await readHousehold((client) => conexionConToken(client, conexionId))
   ).data
 
-  // Paso 2: la red, sin transacción abierta.
+  // Paso 2: la red, sin transacción abierta. Acá entra también la ficha de la
+  // institución, por el mismo motivo: es una llamada HTTP y no puede ocurrir
+  // con la transacción del paso 3 abierta.
   const lectura = await leerDelItem(accessToken, conexion.syncCursor)
+  const pais = await paisDeLaEntidad(conexion.bankId)
 
   // Paso 3: todo el libro, en una transacción.
   return writeHousehold((client) =>
@@ -112,6 +116,11 @@ async function sincronizar(conexionId: string): Promise<ResultadoDelItem> {
       // pone acá quien llama porque el mapeador no mira el reloj: si lo mirara,
       // dos ejecuciones del mismo lote darían informes distintos.
       balanceAsOf: today(),
+      paisDeLaEntidad: pais,
+      // El instante en que se preguntó. `today()` fecha el saldo declarado con
+      // grano de día porque eso es lo que admite el informe; esto lo fecha con
+      // hora, que es lo que distingue dos lecturas del mismo día.
+      observadoEn: new Date().toISOString(),
     }),
   )
 }
