@@ -115,7 +115,9 @@ export default async function EstructuraPage() {
               de un montón de cuentas— así que bajan a la tabla por moneda, que
               es donde cada cuenta sí se puede abrir.
             */}
-            <div className="tile">
+            {/* El protagonista: la pantalla se llama Estructura y su pregunta es
+                cuánto hay. La variación y sus causas son el contexto. */}
+            <div className="tile hero">
               <div className="k">Patrimonio neto</div>
               <div className="v">
                 <Link

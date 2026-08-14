@@ -230,8 +230,12 @@ function Liquidez({ lanes, hoy }: { lanes: readonly CarrilCaja[]; hoy: string })
         </Empty>
       ) : (
         <div className="tiles">
-          {lanes.map((lane) => (
-            <div className="tile" key={lane.currency}>
+          {/* El primer carril es el protagonista de la pantalla, y no es
+              arbitrario: `lanes` viene ordenado por saldo, así que manda el que
+              más dinero tiene. Los demás quedan al tamaño normal — siguen
+              siendo suyos y siguen sumando, pero no compiten por la mirada. */}
+          {lanes.map((lane, i) => (
+            <div className={i === 0 ? 'tile hero' : 'tile'} key={lane.currency}>
               <div className="k">{lane.currency}</div>
               <div className="v">
                 {/* El número más grande de la pantalla también se abre: el

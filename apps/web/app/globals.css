@@ -94,6 +94,18 @@
 	--t-h3: 20px;
 	--t-h2: 25px;
 	--t-h1: 31px;
+	/*
+	 * La cifra que contesta la pregunta de la pantalla. `--t-hero` es su tamaño.
+	 *
+	 * `--t-hero` y `--t-display` **ya estaban acá** y no los usaba nadie: la
+	 * escala tiene once escalones y las pantallas usaban cuatro. No hacía falta
+	 * inventar un tamaño, hacía falta usar el que estaba.
+	 *
+	 * Y se notaba: en /hoy, 182 de 211 elementos de texto
+	 * caían entre 10,5 y 12,5 px, y el `<h1>` medía exactamente lo mismo que
+	 * €21.061,34 — veinte píxeles los dos. Si todo pesa igual, nada pesa, y el
+	 * ojo no sabe por dónde empezar a leer.
+	 */
 	--t-display: 42px;
 	--t-hero: 54px;
 
@@ -427,6 +439,38 @@ ol {
 }
 .pos {
 	color: var(--credit);
+}
+
+/*
+ * El tile protagonista: la cifra que contesta la pregunta de la pantalla.
+ *
+ * **Uno por pantalla.** Dos protagonistas es ninguno, y la regla se rompe sola
+ * en cuanto alguien decide que su panel también merece el tamaño grande. Si
+ * hacen falta dos cifras igual de importantes, la pantalla está contestando dos
+ * preguntas y lo que hay que partir es la pantalla.
+ */
+.tile.hero {
+	padding: var(--s5) var(--s4);
+	/* Dos columnas: a 54 px, un importe de siete cifras no cabe en el ancho de
+	   un tile normal y parte el renglón justo donde más se mira. */
+	grid-column: span 2;
+}
+.tile.hero .v {
+	font-size: var(--t-hero);
+	line-height: 1;
+	margin-top: 10px;
+	letter-spacing: -0.03em;
+}
+.tile.hero .sub {
+	margin-top: 8px;
+	font-size: var(--t-small);
+}
+/* Debajo de 640 px el protagonista baja: a 46 px, un importe de siete cifras
+   se sale de la pantalla y parte el renglón. */
+@media (max-width: 640px) {
+	.tile.hero .v {
+		font-size: var(--t-h1);
+	}
 }
 
 /* ═══ Explicación plegable ═══════════════════════════════════════════════ */
@@ -1349,8 +1393,18 @@ td.num {
 	z-index: 5;
 	flex-wrap: wrap;
 }
+/*
+ * El título de la pantalla **baja** de tamaño, y es a propósito.
+ *
+ * Medía lo mismo que la cifra más importante de la página. Pero el título no es
+ * un dato: dice dónde estás, y eso ya lo dice el menú lateral con la fila
+ * marcada. Compitiendo con las cifras por el mismo peso visual, lo único que
+ * conseguía era que ninguna de las dos destacara.
+ */
 .app-bar .titles h1 {
-	font-size: var(--t-h3);
+	font-size: var(--t-body);
+	font-weight: 600;
+	letter-spacing: 0.01em;
 	line-height: 1.2;
 }
 .app-bar .titles p {

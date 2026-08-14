@@ -249,7 +249,10 @@ export default async function MesPage({
               </div>
 
               <div className="tiles">
-                <div className="tile">
+                {/* El protagonista de esta pantalla. El título dice «en qué se
+                    fue el mes»: la respuesta es cuánto, y todo lo demás
+                    —los deltas, los ingresos, el neto— es contexto de esa cifra. */}
+                <div className="tile hero">
                   <div className="k">Gasto del mes</div>
                   <div className="v">
                     <Money amount={gasto} currency={moneda} />
