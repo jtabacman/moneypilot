@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { formatDate } from '@/lib/format'
 import { navItem } from '@/lib/nav'
-import { loadDemoData, unloadDemoData } from '../demo-actions'
+import { instalarPlan, loadDemoData, unloadDemoData } from '../demo-actions'
 import { Coverage, PageBar } from '../ui'
 import { leerAjustes } from './actions'
 import { FormularioHogar } from './forms'
@@ -91,6 +91,66 @@ export default async function Ajustes() {
               moneda={hogar.monedaBase}
               bloqueada={monedaBloqueada}
             />
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-head">
+            <div>
+              <h2>Plan de cuentas</h2>
+              <p className="small faint">
+                Las categorías contra las que el motor clasifica, y los cuatro ejes con los que se
+                atribuye el gasto.
+              </p>
+            </div>
+            {panel.categorias > 0 && (
+              <span className="status ok">{panel.categorias} categorías</span>
+            )}
+          </div>
+          <div className="panel-body stack">
+            {panel.categorias === 0 ? (
+              <>
+                <p className="lede">
+                  <b>Este hogar no tiene plan de cuentas</b>, y eso no es una preferencia: es lo que
+                  hace que el motor de clasificación no pueda escribir en ningún sitio.
+                </p>
+                <p className="small">
+                  Las cinco capas proponen una ruta —«Vivienda &gt; Suministros &gt; Luz y gas»— y
+                  la buscan entre tus cuentas. Si no está, la propuesta se pierde y el movimiento se
+                  queda en «Sin categorizar». No da error, no aparece en ningún aviso: sencillamente
+                  no se clasifica nada nunca. Los hogares creados a partir de ahora nacen con el
+                  plan puesto; el tuyo es anterior a eso.
+                </p>
+                <p className="small">
+                  Se escriben 84 categorías y las cuatro dimensiones —Propiedad, Entidad, Persona y
+                  Proyecto— vacías. Son cuentas normales: las podés renombrar, colgar de otro sitio
+                  y borrar. <b>Lo que ya tengas con esos nombres se respeta y no se toca</b>, y
+                  correrlo dos veces no duplica nada.
+                </p>
+                <div className="row">
+                  <form action={instalarPlan}>
+                    <button type="submit" className="primary">
+                      Instalar el plan de cuentas
+                    </button>
+                  </form>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="small">
+                  El motor tiene dónde escribir. Cada ruta que proponen el diccionario y la
+                  clasificación del agregador resuelve contra una de estas cuentas.
+                </p>
+                <div className="row">
+                  <form action={instalarPlan}>
+                    <button type="submit">Reinstalar lo que falte</button>
+                  </form>
+                  <Link href="/cuentas" className="btn quiet">
+                    Ver el plan
+                  </Link>
+                </div>
+              </>
+            )}
           </div>
         </section>
 

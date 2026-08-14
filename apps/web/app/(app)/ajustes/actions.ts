@@ -1,6 +1,6 @@
 'use server'
 
-import { hasDemoData } from '@moneypilot/db'
+import { hasDemoData, sqlSinCategorizar } from '@moneypilot/db'
 import { revalidatePath } from 'next/cache'
 import { readHousehold, writeHousehold } from '@/lib/data'
 import { esMonedaConocida } from './monedas'
@@ -75,6 +75,16 @@ export interface PanelAjustes {
   readonly consolidacion: Consolidacion
   readonly ejemploCargado: boolean
   readonly lote: LoteEjemplo | null
+  /**
+   * Cuántas cuentas de categoría tiene el hogar, sin contar las bolsas del
+   * importador.
+   *
+   * Cero significa que el motor de clasificación **no tiene dónde escribir**:
+   * propone, no encuentra la cuenta y todo queda sin categorizar sin dar
+   * ningún error. Le pasa a los hogares creados antes de que el alta instalara
+   * el plan, y no hay forma de que se enteren solos.
+   */
+  readonly categorias: number
 }
 
 interface HogarRow {
@@ -147,6 +157,15 @@ export async function leerAjustes(): Promise<PanelAjustes> {
     )
     // fx_rate es global y de sólo lectura para la aplicación: no lleva
     // tenant_id ni policy, así que este número es del sistema, no del hogar.
+    // Las bolsas del importador —«Sin categorizar», «Ingresos sin
+    // categorizar»— son cuentas de gasto e ingreso como cualquier otra, así
+    // que contarlas diría que el hogar tiene plan cuando no lo tiene.
+    const categorias = await client.query<{ n: number }>(
+      `select count(*)::int as n
+         from account
+        where kind in ('expense', 'income')
+          and not ${sqlSinCategorizar('account')}`,
+    )
     const tasas = await client.query<{ tasas: number }>(
       'select count(*)::int as tasas from fx_rate',
     )
@@ -169,6 +188,7 @@ export async function leerAjustes(): Promise<PanelAjustes> {
       fuentes: fuentes.rows,
       tasas: tasas.rows[0]?.tasas ?? 0,
       ejemplo,
+      categorias: categorias.rows[0]?.n ?? 0,
       lote: lotes.rows[0],
     }
   })
@@ -203,6 +223,7 @@ export async function leerAjustes(): Promise<PanelAjustes> {
       tasasGuardadas: data.tasas,
     },
     ejemploCargado: data.ejemplo,
+    categorias: data.categorias,
     lote:
       data.lote === undefined
         ? null
