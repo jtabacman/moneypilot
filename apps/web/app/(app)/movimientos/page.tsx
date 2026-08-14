@@ -47,6 +47,7 @@ import {
   con,
   type Filtros,
   hayFiltros,
+  importeATexto,
   mas,
   menos,
   PAGE_SIZE,
@@ -371,14 +372,12 @@ export default async function MovimientosPage({
                       <th scope="col" className={styles.marcar}>
                         <span className={styles.oculto}>Marcar</span>
                       </th>
-                      <th scope="col">Fecha</th>
-                      <th scope="col">Descripción</th>
-                      <th scope="col">Cuenta</th>
+                      <Cabecera f={f} campo="fecha" etiqueta="Fecha" />
+                      <Cabecera f={f} campo="descripcion" etiqueta="Descripción" />
+                      <Cabecera f={f} campo="cuenta" etiqueta="Cuenta" />
                       <th scope="col">Categoría</th>
                       <th scope="col">Dimensiones</th>
-                      <th scope="col" className="r">
-                        Importe
-                      </th>
+                      <Cabecera f={f} campo="importe" etiqueta="Importe" alineado />
                     </tr>
                   </thead>
                   <tbody>
@@ -1060,6 +1059,51 @@ function ChipsActivos({
  * Va plegado porque la tabla es lo que se viene a ver, y los filtros puestos
  * ya se leen arriba en los chips.
  */
+/**
+ * Una cabecera que ordena.
+ *
+ * Sólo tres columnas ordenan, y no es una limitación pendiente: categoría y
+ * dimensiones **no son columnas de la consulta** —salen de un lateral que elige
+ * la contrapartida de mayor importe— así que ordenar por ellas ordenaría por
+ * algo que se calcula por fila y no se puede indexar. Enseñar la flecha en una
+ * columna que no ordena sería peor que no enseñarla.
+ *
+ * El orden viaja en la URL, así que se puede compartir y volver: «mis diez
+ * movimientos más grandes de julio» es un enlace, no una secuencia de clics.
+ */
+function Cabecera({
+  f,
+  campo,
+  etiqueta,
+  alineado = false,
+}: {
+  f: Filtros
+  campo: 'fecha' | 'importe' | 'descripcion' | 'cuenta'
+  etiqueta: string
+  alineado?: boolean
+}) {
+  // Sólo la fecha y el importe tienen las dos direcciones. En descripción y
+  // cuenta, la inversa no contesta ninguna pregunta que alguien se haga.
+  const asc = campo === 'fecha' || campo === 'importe' ? `${campo}-asc` : `${campo}-asc`
+  const desc = campo === 'fecha' || campo === 'importe' ? `${campo}-desc` : `${campo}-asc`
+  const activoAsc = f.orden === asc
+  const siguiente = (activoAsc ? desc : asc) as Filtros['orden']
+  const activo = f.orden === asc || f.orden === desc
+
+  return (
+    <th
+      scope="col"
+      className={alineado ? 'r' : undefined}
+      aria-sort={activo ? (activoAsc ? 'ascending' : 'descending') : 'none'}
+    >
+      <Link href={ruta(con(f, { orden: siguiente }))}>
+        {etiqueta}
+        {activo ? (activoAsc ? ' ↑' : ' ↓') : ''}
+      </Link>
+    </th>
+  )
+}
+
 function Formulario({
   f,
   cuentas,
@@ -1076,12 +1120,15 @@ function Formulario({
     .sort((a, b) => a.name.localeCompare(b.name, 'es'))
   const gastos = categorias.filter((c) => c.kind === 'expense')
   const ingresos = categorias.filter((c) => c.kind === 'income')
+  // Las monedas que el hogar usa de verdad, no una lista ISO entera: ofrecer
+  // 180 divisas a quien tiene dos es esconder las dos que importan.
+  const monedas = [...new Set(operativas.map((c) => c.currency.trim()))].sort()
 
   return (
     <details className="panel" open={hayFiltros(f)}>
       <summary className={`panel-head ${styles.sumario}`}>
         <h2>Filtrar</h2>
-        <small>Período, cuenta, categoría, dimensión y texto</small>
+        <small>Período, importe, moneda, cuenta, categoría, dimensión y texto</small>
       </summary>
 
       <form method="get" action="/movimientos" className={`panel-body ${styles.formulario}`}>
@@ -1103,6 +1150,53 @@ function Formulario({
             defaultValue={f.texto ?? ''}
             placeholder="iberdrola, alquiler, notaría…"
           />
+        </label>
+
+        {/* El importe va sin signo y se dice: quien busca «de 1.000 para
+            arriba» quiere sus movimientos más gordos, y en el libro los gastos
+            son negativos. Con el signo dentro, ese filtro devolvería sólo
+            ingresos. */}
+        <label className={styles.campo}>
+          <span className="label">Importe desde</span>
+          <input
+            type="text"
+            inputMode="decimal"
+            name="min"
+            defaultValue={importeATexto(f.importeMin)}
+            placeholder="1.000,00"
+          />
+        </label>
+
+        <label className={styles.campo}>
+          <span className="label">Importe hasta</span>
+          <input
+            type="text"
+            inputMode="decimal"
+            name="max"
+            defaultValue={importeATexto(f.importeMax)}
+            placeholder="sin tope"
+          />
+        </label>
+
+        <label className={styles.campo}>
+          <span className="label">Moneda</span>
+          <select name="moneda" defaultValue={f.moneda ?? ''}>
+            <option value="">— todas —</option>
+            {monedas.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className={styles.campo}>
+          <span className="label">Cómo entró</span>
+          <select name="origen" defaultValue={f.origen ?? ''}>
+            <option value="">— de cualquier origen —</option>
+            <option value="file">Por fichero</option>
+            <option value="api">Por el banco conectado</option>
+          </select>
         </label>
 
         <label className={styles.campo}>
@@ -1161,6 +1255,13 @@ function Formulario({
             <input type="checkbox" name="transferencias" value="1" defaultChecked={f.traspasos} />
             <span className="small">Incluir las patas de traspaso</span>
           </label>
+          <label className="row">
+            <input type="checkbox" name="sincat" value="1" defaultChecked={f.sinCategorizar} />
+            <span className="small">Sólo lo que sigue sin categorizar</span>
+          </label>
+          {/* El orden viaja por el formulario además de por las cabeceras, para
+              que aplicar un filtro no lo pierda. */}
+          <input type="hidden" name="orden" value={f.orden} />
           <div className="row">
             <Link className="btn" href={ruta(SIN_FILTROS)}>
               Limpiar

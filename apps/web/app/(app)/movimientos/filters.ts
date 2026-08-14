@@ -15,7 +15,7 @@
  * nunca a una pantalla de error.
  */
 
-import type { MovementFilter } from '@moneypilot/db'
+import type { MovementFilter, MovementSort } from '@moneypilot/db'
 
 /** Filas por página. La lectura es la unidad de trabajo, no el scroll infinito. */
 export const PAGE_SIZE = 50
@@ -41,11 +41,45 @@ export interface Filtros {
    * traspaso interno no son gasto ni ingreso, y sumarlas duplicaría el total.
    */
   readonly traspasos: boolean
+  /**
+   * Rango de importe, en unidades mínimas y sobre el valor absoluto.
+   *
+   * Absoluto porque «de mil euros para arriba» tiene que traer los gastos
+   * grandes, que en el libro son negativos. Con el signo dentro, ese filtro
+   * devolvería sólo ingresos y contestaría lo contrario de lo que se le pidió.
+   */
+  readonly importeMin: bigint | null
+  readonly importeMax: bigint | null
+  /** Un carril de moneda. En un hogar multi-divisa se pide el primer día. */
+  readonly moneda: string | null
+  /** Sólo los que todavía no tienen categoría. */
+  readonly sinCategorizar: boolean
+  /** De dónde entró: por fichero o por el feed de un agregador. */
+  readonly origen: 'file' | 'api' | null
+  readonly orden: MovementSort
   /** Base 1: es lo que se ve en la URL. El offset se calcula al consultar. */
   readonly pagina: number
 }
 
+/** El orden por defecto. Lo más nuevo arriba, que es como se lee un extracto. */
+export const ORDEN_POR_DEFECTO: MovementSort = 'fecha-desc'
+
+const ORDENES: readonly MovementSort[] = [
+  'fecha-desc',
+  'fecha-asc',
+  'importe-desc',
+  'importe-asc',
+  'descripcion-asc',
+  'cuenta-asc',
+]
+
 export const SIN_FILTROS: Filtros = {
+  importeMin: null,
+  importeMax: null,
+  moneda: null,
+  sinCategorizar: false,
+  origen: null,
+  orden: ORDEN_POR_DEFECTO,
   desde: null,
   hasta: null,
   cuentas: [],
@@ -175,8 +209,51 @@ export function parseFiltros(params: SearchParams): Filtros {
     dimensiones: ids(params['dimension']).lista,
     texto: textoBruto === '' ? null : textoBruto,
     traspasos: uno(params['transferencias']) === '1',
+    importeMin: importe(params['min']),
+    importeMax: importe(params['max']),
+    moneda: moneda(params['moneda']),
+    sinCategorizar: uno(params['sincat']) === '1',
+    origen: origen(params['origen']),
+    orden: ordenDe(params['orden']),
     pagina: Number.isFinite(paginaBruta) && paginaBruta > 1 ? paginaBruta : 1,
   }
+}
+
+/**
+ * Un importe de la URL a unidades mínimas.
+ *
+ * Se admite «1.234,56» y «1234.56»: la URL la escribe una persona tanto como la
+ * escribe la pantalla, y rechazar la coma decimal en un producto español sería
+ * rechazar la forma normal de escribirlo. Lo que no se admite es cualquier otra
+ * cosa: un texto raro se descarta en vez de convertirse en cero, porque un cero
+ * es un filtro que sí hace algo.
+ */
+function importe(valor: string | string[] | undefined): bigint | null {
+  const texto = uno(valor)?.trim()
+  if (texto === undefined || texto === '') return null
+  const limpio = texto.replace(/\./g, '').replace(',', '.')
+  if (!/^\d+(\.\d{1,2})?$/.test(limpio)) return null
+  const [entera = '0', decimal = ''] = limpio.split('.')
+  return BigInt(entera) * 100n + BigInt(decimal.padEnd(2, '0'))
+}
+
+function moneda(valor: string | string[] | undefined): string | null {
+  const texto = uno(valor)?.trim().toUpperCase()
+  return texto !== undefined && /^[A-Z]{3}$/.test(texto) ? texto : null
+}
+
+function origen(valor: string | string[] | undefined): 'file' | 'api' | null {
+  const texto = uno(valor)
+  return texto === 'file' || texto === 'api' ? texto : null
+}
+
+/**
+ * El orden de la URL. Lista cerrada: lo que llega es una etiqueta y lo que se
+ * ejecuta es SQL escrito en el repositorio, nunca el texto del parámetro.
+ */
+function ordenDe(valor: string | string[] | undefined): MovementSort {
+  const texto = uno(valor)
+  return ORDENES.find((o) => o === texto) ?? ORDEN_POR_DEFECTO
 }
 
 /** ¿Hay algo que quitar? El botón de limpiar no aparece si no hay nada puesto. */
@@ -188,8 +265,21 @@ export function hayFiltros(f: Filtros): boolean {
     f.categorias.length > 0 ||
     f.dimensiones.length > 0 ||
     f.texto !== null ||
-    f.traspasos
+    f.traspasos ||
+    f.importeMin !== null ||
+    f.importeMax !== null ||
+    f.moneda !== null ||
+    f.sinCategorizar ||
+    f.origen !== null
   )
+}
+
+/** El importe en el formato que espera el campo del formulario. */
+export function importeATexto(valor: bigint | null): string {
+  if (valor === null) return ''
+  const entera = valor / 100n
+  const decimal = valor % 100n
+  return `${entera},${decimal.toString().padStart(2, '0')}`
 }
 
 export type Query = Record<string, string | string[]>
@@ -204,6 +294,12 @@ export function aQuery(f: Filtros): Query {
   if (f.dimensiones.length > 0) q['dimension'] = [...f.dimensiones]
   if (f.texto !== null) q['q'] = f.texto
   if (f.traspasos) q['transferencias'] = '1'
+  if (f.importeMin !== null) q['min'] = importeATexto(f.importeMin)
+  if (f.importeMax !== null) q['max'] = importeATexto(f.importeMax)
+  if (f.moneda !== null) q['moneda'] = f.moneda
+  if (f.sinCategorizar) q['sincat'] = '1'
+  if (f.origen !== null) q['origen'] = f.origen
+  if (f.orden !== ORDEN_POR_DEFECTO) q['orden'] = f.orden
   if (f.pagina > 1) q['pagina'] = String(f.pagina)
   return q
 }
@@ -260,5 +356,11 @@ export function aFiltroDb(f: Filtros): MovementFilter {
     dimensionValueIds: f.dimensiones.length > 0 ? f.dimensiones : undefined,
     search: f.texto ?? undefined,
     includeTransfers: f.traspasos,
+    minAmount: f.importeMin ?? undefined,
+    maxAmount: f.importeMax ?? undefined,
+    currency: f.moneda ?? undefined,
+    onlyUncategorized: f.sinCategorizar ? true : undefined,
+    source: f.origen ?? undefined,
+    sort: f.orden,
   }
 }

@@ -31,6 +31,7 @@
  */
 
 import type { TenantClient } from '../client.js'
+import { sqlSinCategorizar } from './classify.js'
 
 export type AccountKind = 'asset' | 'liability' | 'income' | 'expense' | 'equity' | 'trading'
 
@@ -155,6 +156,21 @@ export interface AccountBalance {
   readonly declaredOn: Ymd | null
   /** balance - declared. Null cuando no hay nada contra qué comparar. */
   readonly delta: bigint | null
+  /**
+   * El último saldo que el agregador leyó del banco, y cuándo.
+   *
+   * Es **otra comprobación**, no la misma: `declared` viene de un extracto y
+   * tiene grano de día; esto viene de una lectura del proveedor y tiene grano
+   * de instante. Una cuenta alimentada por feed no tiene extracto declarado
+   * nunca, y sin esto las pantallas decían «no se pudo comprobar» justo después
+   * de haberla comprobado al céntimo. Ver la migración 012.
+   */
+  readonly providerBalance: bigint | null
+  /** ISO 8601 con hora. No es un `Ymd`: el instante es el punto. */
+  readonly providerBalanceAt: string | null
+  readonly providerName: string | null
+  /** balance - providerBalance. Null cuando el proveedor no dijo nada. */
+  readonly providerDelta: bigint | null
   readonly movements: number
   /**
    * Postings de la cuenta en una moneda distinta a la suya, que por eso
@@ -176,6 +192,9 @@ interface AccountBalanceRow {
   parent_id: string | null
   closed_at: string | null
   balance: string
+  provider_balance: string | null
+  provider_balance_at: string | null
+  provider_name: string | null
   movements: number
   foreign_postings: number
   last_movement_on: string | null
@@ -219,7 +238,10 @@ export async function accountBalances(
        m.foreign_postings,
        to_char(m.last_movement_on, 'YYYY-MM-DD') as last_movement_on,
        d.amount::text as declared,
-       to_char(d.as_of, 'YYYY-MM-DD') as declared_on
+       to_char(d.as_of, 'YYYY-MM-DD') as declared_on,
+       pv.amount::text as provider_balance,
+       to_char(pv.observed_at, 'YYYY-MM-DD"T"HH24:MI:SSOF:00') as provider_balance_at,
+       pv.provider::text as provider_name
      from account a
      left join lateral (
        select
@@ -241,6 +263,18 @@ export async function accountBalances(
        order by db.as_of desc
        limit 1
      ) d on true
+     left join lateral (
+       -- La moneda se compara igual que arriba: un saldo en otra divisa daría
+       -- un delta inventado, que es la trampa que esta consulta se niega a
+       -- hacer en los tres sitios donde compara.
+       select pb.amount, pb.observed_at, pb.provider
+       from provider_balance pb
+       where pb.account_id = a.id
+         and pb.currency = a.currency
+         and ($1::date is null or pb.observed_at::date <= $1::date)
+       order by pb.observed_at desc
+       limit 1
+     ) pv on true
      order by a.kind, a.name`,
     [asOf],
   )
@@ -248,6 +282,7 @@ export async function accountBalances(
   return rows.map((row) => {
     const balance = toBigInt(row.balance)
     const declared = toBigIntOrNull(row.declared)
+    const proveedor = toBigIntOrNull(row.provider_balance)
     return {
       id: row.id,
       name: row.name,
@@ -261,6 +296,10 @@ export async function accountBalances(
       declared,
       declaredOn: row.declared_on,
       delta: declared === null ? null : balance - declared,
+      providerBalance: proveedor,
+      providerBalanceAt: row.provider_balance_at,
+      providerName: row.provider_name,
+      providerDelta: proveedor === null ? null : balance - proveedor,
       movements: toCount(row.movements),
       foreignPostings: toCount(row.foreign_postings),
       lastMovementOn: row.last_movement_on,
@@ -365,8 +404,51 @@ export interface MovementFilter {
    * rige en las agregaciones de gasto/ingreso (`totals`), no en el listado.
    */
   readonly includeTransfers?: boolean | undefined
+  /**
+   * Rango de importe, en unidades mínimas y **sobre el valor absoluto**.
+   *
+   * Absoluto porque la pregunta que se hace una persona es «los movimientos de
+   * más de mil euros», no «los de más de mil euros positivos». Con el signo
+   * dentro, «desde 100.000» dejaría fuera todos los gastos grandes, que son
+   * negativos, y el filtro contestaría lo contrario de lo que se le pidió.
+   */
+  readonly minAmount?: bigint | undefined
+  readonly maxAmount?: bigint | undefined
+  /** La moneda de la pata listada. Un hogar multi-divisa lo pide el primer día. */
+  readonly currency?: string | undefined
+  /** Sólo los que no tienen categoría todavía. */
+  readonly onlyUncategorized?: boolean | undefined
+  /** De dónde entró: 'file' o 'api'. */
+  readonly source?: DataSource | undefined
+  /**
+   * Por qué columna ordenar. Por defecto, fecha descendente.
+   *
+   * Es una lista cerrada y no un texto: el valor llega de la URL y concatenarlo
+   * en el `order by` sería inyección. Lo que se recibe es una etiqueta y lo que
+   * se ejecuta es SQL escrito acá.
+   */
+  readonly sort?: MovementSort | undefined
   readonly limit?: number | undefined
   readonly offset?: number | undefined
+}
+
+export type MovementSort =
+  | 'fecha-desc'
+  | 'fecha-asc'
+  | 'importe-desc'
+  | 'importe-asc'
+  | 'descripcion-asc'
+  | 'cuenta-asc'
+
+const ORDEN: Readonly<Record<MovementSort, string>> = {
+  // El desempate por `p.id` no es cosmético: sin un orden total, dos páginas
+  // consecutivas pueden repetir una fila y saltarse otra.
+  'fecha-desc': 'e.booked_on desc, e.id desc, p.ordinal, p.id',
+  'fecha-asc': 'e.booked_on asc, e.id asc, p.ordinal, p.id',
+  'importe-desc': 'abs(p.amount) desc, e.booked_on desc, p.id',
+  'importe-asc': 'abs(p.amount) asc, e.booked_on desc, p.id',
+  'descripcion-asc': 'e.description asc, e.booked_on desc, p.id',
+  'cuenta-asc': 'a.name asc, e.booked_on desc, p.id',
 }
 
 export interface MovementPage {
@@ -401,6 +483,16 @@ const MOVEMENT_WHERE = `
         join posting sp on sp.id = pd.posting_id
         where sp.entry_id = p.entry_id
           and pd.dimension_value_id = any($5::uuid[])))
+  and ($8::bigint is null or abs(p.amount) >= $8::bigint)
+  and ($9::bigint is null or abs(p.amount) <= $9::bigint)
+  and ($10::text  is null or trim(p.currency) = $10::text)
+  and ($11::text  is null or e.source = $11::text::data_source)
+  and (not $12::boolean or exists (
+        select 1 from posting up
+        join account ua on ua.id = up.account_id
+        where up.entry_id = p.entry_id
+          and ua.kind in ('expense', 'income')
+          and ${sqlSinCategorizar('ua')}))
 `
 
 interface MovementQueryRow {
@@ -461,6 +553,13 @@ export async function movements(
     filter.dimensionValueIds === undefined ? null : [...filter.dimensionValueIds],
     likePattern(filter.search),
     filter.includeTransfers !== false,
+    filter.minAmount === undefined ? null : filter.minAmount.toString(),
+    filter.maxAmount === undefined ? null : filter.maxAmount.toString(),
+    filter.currency === undefined || filter.currency.trim() === ''
+      ? null
+      : filter.currency.trim().toUpperCase(),
+    filter.source ?? null,
+    filter.onlyUncategorized === true,
   ]
 
   const page = await client.query<MovementQueryRow>(
@@ -525,8 +624,8 @@ export async function movements(
        join dimension_value dv on dv.id = x.dimension_value_id
      ) dim on true
      where ${MOVEMENT_WHERE}
-     order by e.booked_on desc, p.id desc
-     limit $8 offset $9`,
+     order by ${ORDEN[filter.sort ?? 'fecha-desc']}
+     limit $13 offset $14`,
     [...params, limit, offset],
   )
 

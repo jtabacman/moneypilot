@@ -805,9 +805,25 @@ td.num {
  * esto cargaría el presupuesto de rendimiento de todas las páginas.
  */
 
+/*
+ * `align-items: stretch` —el de por sí— y no `flex-end`, que es lo que estaba.
+ *
+ * Los segmentos se dimensionan con `height: N%`, y un porcentaje sólo resuelve
+ * contra un padre de altura **definida**. Con `align-items: flex-end` cada
+ * columna se dimensionaba por su contenido, así que la altura del padre era
+ * indeterminada, el porcentaje caía a `auto` y todas las barras se quedaban en
+ * el `min-height: 1px` de abajo. Se veían tres gráficos dibujados como hilos
+ * pegados al eje —la proyección a 13 semanas, el gasto del mes y el de la
+ * página pública— y ninguno daba error: mostraban datos correctos con una
+ * altura de un píxel.
+ *
+ * Las barras siguen apoyadas en el eje, pero por el `justify-content: flex-end`
+ * de la columna, que es donde corresponde: es la columna la que apila sus
+ * segmentos de abajo hacia arriba, no la fila la que empuja las columnas.
+ */
 .bars {
 	display: flex;
-	align-items: flex-end;
+	align-items: stretch;
 	gap: 3px;
 	height: 128px;
 }

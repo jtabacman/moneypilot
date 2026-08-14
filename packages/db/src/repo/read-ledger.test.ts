@@ -602,6 +602,49 @@ suite('lectura del libro mayor', () => {
     expect(sinTransferencias.rows.every((row) => !row.isTransfer)).toBe(true)
   })
 
+  it('el rango de importe mira el valor absoluto, no el signo', async () => {
+    // Es la decisión que hace que el filtro conteste lo que se le pidió. Con el
+    // signo dentro, «de 100 € para arriba» dejaría fuera todos los gastos
+    // grandes —que son negativos— y devolvería sólo ingresos, que es
+    // exactamente lo contrario de lo que quiere quien busca sus movimientos
+    // más gordos.
+    const grandes = await read((client) =>
+      movements(client, { accountIds: [account['bancoEur'] as string], minAmount: 50_000n }),
+    )
+    expect(grandes.rows.length).toBeGreaterThan(0)
+    expect(
+      grandes.rows.every((row) => (row.amount < 0n ? -row.amount : row.amount) >= 50_000n),
+    ).toBe(true)
+    // Y que de verdad filtró: el total sin el rango es mayor.
+    const todos = await read((client) =>
+      movements(client, { accountIds: [account['bancoEur'] as string] }),
+    )
+    expect(grandes.total).toBeLessThan(todos.total)
+  })
+
+  it('el filtro de moneda separa los carriles', async () => {
+    const eur = await read((client) => movements(client, { currency: 'eur' }))
+    expect(eur.rows.length).toBeGreaterThan(0)
+    expect(eur.rows.every((row) => row.currency.trim() === 'EUR')).toBe(true)
+  })
+
+  it('el orden por importe es total: dos páginas no repiten ni se saltan filas', async () => {
+    // Sin desempate estable, `order by abs(amount)` reordena los empates entre
+    // consultas y la página 2 puede traer una fila que ya salió en la 1. No da
+    // error: da un listado que no cuadra con su propio total.
+    const primera = await read((client) =>
+      movements(client, { sort: 'importe-desc', limit: 3, offset: 0 }),
+    )
+    const segunda = await read((client) =>
+      movements(client, { sort: 'importe-desc', limit: 3, offset: 3 }),
+    )
+    const ids = [...primera.rows, ...segunda.rows].map((row) => row.postingId)
+    expect(new Set(ids).size).toBe(ids.length)
+
+    const importes = primera.rows.map((row) => (row.amount < 0n ? -row.amount : row.amount))
+    expect([...importes].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))).toEqual(importes)
+  })
+
   it('la paginación devuelve el total del filtro, no el de la página', async () => {
     const primera = await read((client) =>
       movements(client, { accountIds: [account['bancoEur'] as string], limit: 2 }),
