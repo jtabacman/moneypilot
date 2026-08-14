@@ -25,6 +25,21 @@ interface Health {
   readonly migraciones: number | null
   readonly rolDeAplicacion: boolean
   readonly altaDeHogar: boolean
+  /**
+   * Cuánto tarda un viaje de ida y vuelta a la base, en milisegundos.
+   *
+   * No es un adorno de observabilidad: es el número que decide si una pantalla
+   * lenta lo es por una consulta cara o por la distancia entre la función y la
+   * base. Cada página hace entre 7 y 15 viajes en serie, así que este número
+   * multiplicado por quince es el suelo de lo que puede tardar la más pesada —
+   * y la única forma de bajarlo es acercarlas o hacer menos viajes.
+   *
+   * Se mide con `select 1` sobre una conexión ya abierta, así que no incluye el
+   * handshake: es la latencia de una consulta, no la de conectarse.
+   */
+  readonly idaYVueltaMs: number | null
+  /** Abrir la conexión: TCP más TLS. Se paga una vez por conexión nueva. */
+  readonly conectarMs: number | null
   readonly error: string | null
 }
 
@@ -36,6 +51,8 @@ export async function GET(): Promise<NextResponse<Health>> {
     migraciones: null,
     rolDeAplicacion: false,
     altaDeHogar: false,
+    idaYVueltaMs: null,
+    conectarMs: null,
     error: null,
   }
 
@@ -47,6 +64,17 @@ export async function GET(): Promise<NextResponse<Health>> {
   const pool = createPool({ connectionString: databaseUrl(), max: 1 })
 
   try {
+    // Primero la conexión sola, para separar el coste de abrirla del de
+    // preguntar. La segunda medición ya va sobre una conexión caliente.
+    const t0 = Date.now()
+    const cliente = await pool.connect()
+    const conectarMs = Date.now() - t0
+
+    const t1 = Date.now()
+    await cliente.query('select 1')
+    const idaYVueltaMs = Date.now() - t1
+    cliente.release()
+
     const { rows } = await pool.query<{
       migraciones: string
       rol: boolean
@@ -69,6 +97,8 @@ export async function GET(): Promise<NextResponse<Health>> {
       migraciones,
       rolDeAplicacion: row.rol,
       altaDeHogar: row.alta,
+      idaYVueltaMs,
+      conectarMs,
     }
     const sano = migraciones > 0 && row.rol && row.alta
     return NextResponse.json(health, { status: sano ? 200 : 503 })
