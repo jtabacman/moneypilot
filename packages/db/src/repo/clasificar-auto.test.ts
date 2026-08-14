@@ -38,9 +38,10 @@ import {
   clasificarAutomatico,
   explicarClasificacion,
   type ObservacionDelOrigen,
+  rechazarPropuesta,
 } from './clasificar-auto.js'
 import { applyAllRules, createRule, planRules, reclassify } from './classify.js'
-import { recordarPorComercio } from './memoria.js'
+import { autorAutomatico, recordarPorComercio } from './memoria.js'
 
 const ADMIN_URL = process.env['DATABASE_URL']
 const APP_URL = process.env['DATABASE_APP_URL']
@@ -727,6 +728,116 @@ suite('clasificación automática', () => {
         expect(r.aplicadas).toBe(0)
         expect(r.sugeridas).toBe(1)
         expect(await categoriaDe(client, entryId)).toBe('Sin categorizar (EUR)')
+      })
+    })
+
+    it('confirmar tres veces una sugerencia hace que a la cuarta se aplique sola', async () => {
+      // El bucle entero del producto, de punta a punta, y hasta hoy sin probar:
+      // el diccionario SUGIERE (nunca aplica), una persona confirma, y a partir
+      // de la tercera confirmación la memoria del hogar lo aplica sin
+      // preguntar. Es la tesis del motor —«clasificás una vez y se aprende»— y
+      // si se rompiera, lo que se vería es que el producto nunca deja de
+      // preguntar lo mismo. Ningún test lo tocaba porque cada mitad estaba
+      // probada por su lado.
+      const hogar = await nuevoHogar('bucle')
+      await withTenant(app, hogar.tenantId, async (client) => {
+        for (let n = 1; n <= 3; n += 1) {
+          const entryId = await asentar(client, hogar, `MERCADONA REF ${n}`)
+          const r = await clasificarAutomatico(client, { aplicar: true })
+          const propuesta = unico(r.propuestas, 'propuesta')
+          // La primera vez sólo puede hablar el diccionario; a partir de la
+          // segunda la memoria ya tiene un recuerdo y se pone por encima —pero
+          // todavía no aplica, que es lo que se está comprobando.
+          expect(propuesta.procedencia).toBe(n === 1 ? 'diccionario' : 'memoria')
+          // Nadie aplica solo por debajo del mínimo: ésa es la mitad que
+          // sostiene todo lo demás.
+          expect(propuesta.automatica).toBe(false)
+          expect(r.aplicadas).toBe(0)
+
+          // Y la confirmación de la persona. Sin `ruleId` y firmada con su
+          // correo: son las dos condiciones que hacen que el recuerdo cuente.
+          await reclassify(client, {
+            entryIds: [entryId],
+            categoryId: hogar.supermercado,
+            changedBy: ANA,
+          })
+        }
+
+        const cuarto = await asentar(client, hogar, 'MERCADONA REF 4')
+        const r = await clasificarAutomatico(client, { aplicar: true })
+        const propuesta = unico(r.propuestas, 'propuesta')
+        expect(propuesta.entryId).toBe(cuarto)
+        expect(propuesta.procedencia).toBe('memoria')
+        expect(propuesta.automatica).toBe(true)
+        expect(r.aplicadas).toBe(1)
+        expect(await categoriaDe(client, cuarto)).toBe('Supermercado')
+      })
+    })
+
+    it('lo que firma el motor no alimenta la memoria', async () => {
+      // El test negativo que protege del bucle vicioso: si las decisiones
+      // automáticas contaran hacia el mínimo, el motor aprendería de sí mismo y
+      // se volvería cada vez más seguro de estar equivocado.
+      const hogar = await nuevoHogar('sin-bucle')
+      await withTenant(app, hogar.tenantId, async (client) => {
+        for (let n = 1; n <= 3; n += 1) {
+          const entryId = await asentar(client, hogar, `MERCADONA AUTO ${n}`)
+          await reclassify(client, {
+            entryIds: [entryId],
+            categoryId: hogar.supermercado,
+            changedBy: autorAutomatico('diccionario'),
+          })
+        }
+        const cuarto = await asentar(client, hogar, 'MERCADONA AUTO 4')
+        const r = await clasificarAutomatico(client, { aplicar: true })
+        expect(unico(r.propuestas, 'propuesta').procedencia).toBe('diccionario')
+        expect(r.aplicadas).toBe(0)
+        expect(await categoriaDe(client, cuarto)).toBe('Sin categorizar (EUR)')
+      })
+    })
+
+    it('una propuesta rechazada no vuelve a ofrecerse, y las demás sí', async () => {
+      const hogar = await nuevoHogar('rechazo')
+      await withTenant(app, hogar.tenantId, async (client) => {
+        const rechazado = await asentar(client, hogar, 'MERCADONA REF 8812')
+        const otro = await asentar(client, hogar, 'MERCADONA REF 9903')
+
+        await rechazarPropuesta(client, {
+          entryId: rechazado,
+          categoryId: hogar.supermercado,
+          procedencia: 'diccionario',
+          rechazadoPor: ANA,
+        })
+
+        const conFiltro = await clasificarAutomatico(client, {
+          aplicar: false,
+          excluirRechazadas: true,
+        })
+        expect(conFiltro.propuestas.map((p) => p.entryId)).toEqual([otro])
+
+        // Sin el filtro sigue apareciendo: /reglas mide qué propondría el motor,
+        // y esconderle lo rechazado convertiría esa medición en otra cosa.
+        const sinFiltro = await clasificarAutomatico(client, { aplicar: false })
+        expect(sinFiltro.propuestas).toHaveLength(2)
+
+        // Y el rechazo no toca el libro.
+        expect(await categoriaDe(client, rechazado)).toBe('Sin categorizar (EUR)')
+      })
+    })
+
+    it('el rechazo es de una categoría concreta, no del movimiento', async () => {
+      const hogar = await nuevoHogar('rechazo-otra')
+      await withTenant(app, hogar.tenantId, async (client) => {
+        const entryId = await asentar(client, hogar, 'MERCADONA REF 8812')
+        // Rechazado para OTRA categoría: la propuesta del diccionario sigue en
+        // pie porque nadie dijo que no a ésa.
+        await rechazarPropuesta(client, {
+          entryId,
+          categoryId: hogar.oficina,
+          rechazadoPor: ANA,
+        })
+        const r = await clasificarAutomatico(client, { aplicar: false, excluirRechazadas: true })
+        expect(r.propuestas.map((p) => p.entryId)).toEqual([entryId])
       })
     })
 

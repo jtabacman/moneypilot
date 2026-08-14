@@ -1,4 +1,12 @@
-import { accountBalances, type ReviewRow, reviewQueue } from '@moneypilot/db'
+import {
+  accountBalances,
+  categoryTree,
+  clasificarAutomatico,
+  type PropuestaAutomatica,
+  type ReviewRow,
+  reviewQueue,
+} from '@moneypilot/db'
+import { CAPA } from '@/lib/capas'
 import { readHousehold } from '@/lib/data'
 import { formatDate } from '@/lib/format'
 import { navItem } from '@/lib/nav'
@@ -15,6 +23,7 @@ import {
   leerTransaccionEnEspera,
 } from './kinds'
 import { EnRegistro } from './links'
+import { DecidirPropuesta } from './propuestas'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,6 +36,18 @@ const ITEM = navItem('/revisar')
  */
 const TOPE = 200
 
+/**
+ * Cuántas propuestas se calculan por carga.
+ *
+ * Las propuestas **no se guardan**: se recalculan al abrir, porque una guardada
+ * caduca sola en cuanto cambia el diccionario, la memoria o una regla. El coste
+ * medido es de 75-140 ms sobre 566 movimientos sin categorizar, pero sube de
+ * forma superlineal —4.500 tardan tres segundos—, y un hogar que carga dos años
+ * por fichero llega a ese número el primer día. Con el tope, la pantalla abre
+ * siempre igual de rápido y lo que queda fuera se declara en el pie.
+ */
+const TOPE_DE_PROPUESTAS = 40
+
 export default async function RevisarPage() {
   const { session, data } = await readHousehold(async (client) => {
     // En serie: las dos van por el mismo cliente —una transacción, una
@@ -35,7 +56,16 @@ export default async function RevisarPage() {
     // en pg@9 será un error.
     const cola = await reviewQueue(client, { limit: TOPE })
     const cuentas = await accountBalances(client)
-    return { cola, cuentas }
+    // En seco y sin las que ya se descartaron. `aplicar: false` es lo que
+    // separa esta pantalla de la importación: acá el motor no escribe nada,
+    // sólo dice qué haría.
+    const clasificacion = await clasificarAutomatico(client, {
+      aplicar: false,
+      excluirRechazadas: true,
+      limite: TOPE_DE_PROPUESTAS,
+    })
+    const categorias = await categoryTree(client)
+    return { cola, cuentas, clasificacion, categorias }
   })
 
   const movimientos = data.cuentas.reduce((total, cuenta) => total + cuenta.movements, 0)
@@ -45,6 +75,12 @@ export default async function RevisarPage() {
 
   const pendientes = data.cola.filter((fila) => fila.state === 'pendiente')
   const resueltas = data.cola.filter((fila) => fila.state !== 'pendiente')
+
+  // Las automáticas no se enseñan: ésas el motor las escribe solo y no hay nada
+  // que preguntar. Lo que llega acá es lo que espera criterio.
+  const propuestas = data.clasificacion.propuestas.filter((p) => !p.automatica)
+  const nombreDeCategoria = new Map(data.categorias.map((c) => [c.id, c.path]))
+  const porDecidir = pendientes.length + propuestas.length
 
   // Por qué se comprueba acá y no se esconde el botón: B6. El motivo viaja
   // hasta el botón para que se lea antes de intentarlo, y la acción de servidor
@@ -57,16 +93,16 @@ export default async function RevisarPage() {
         title={ITEM?.label ?? 'Revisar'}
         blurb={ITEM?.blurb ?? 'Lo que el motor no se anima a decidir solo.'}
         tools={
-          pendientes.length > 0 ? (
+          porDecidir > 0 ? (
             <span className="status warn">
-              {pendientes.length} {pendientes.length === 1 ? 'pendiente' : 'pendientes'}
+              {porDecidir} {porDecidir === 1 ? 'pendiente' : 'pendientes'}
             </span>
           ) : undefined
         }
       />
 
       <div className="page">
-        {movimientos === 0 && data.cola.length === 0 ? (
+        {movimientos === 0 && data.cola.length === 0 && propuestas.length === 0 ? (
           <NoData what="la cola de lo que necesita tu criterio" />
         ) : (
           <>
@@ -79,7 +115,19 @@ export default async function RevisarPage() {
               cuentas={indice}
               accionable
               motivo={motivo}
-              vacio="Todo lo que entró se pudo clasificar sin dudar. Cuando el motor no esté seguro, lo va a dejar acá."
+              vacio={
+                propuestas.length > 0
+                  ? 'Nada dudoso en la deduplicación. Las categorías que el motor propone están más abajo.'
+                  : 'Ninguna fila quedó dudosa al deduplicar. Cuando el motor no se anime a descartar algo, lo va a dejar acá.'
+              }
+            />
+
+            <Propuestas
+              filas={propuestas}
+              nombreDeCategoria={nombreDeCategoria}
+              motivo={motivo}
+              sinCategorizar={data.clasificacion.sinPropuesta}
+              tope={TOPE_DE_PROPUESTAS}
             />
 
             {resueltas.length > 0 && (
@@ -104,6 +152,153 @@ export default async function RevisarPage() {
         )}
       </div>
     </>
+  )
+}
+
+/* ── Las categorías que el motor propone ─────────────────────────────────── */
+
+/**
+ * Sección aparte de la cola del dedup, y a propósito.
+ *
+ * Son dos preguntas distintas. Arriba se decide **si un movimiento entra al
+ * libro**; acá el movimiento ya está dentro y lo que se decide es **en qué
+ * categoría va**. Mezclarlas en una tabla obligaría a que «aceptar» significara
+ * cosas distintas según la fila, que es justo lo que los rótulos de decisión
+ * existen para evitar.
+ */
+function Propuestas({
+  filas,
+  nombreDeCategoria,
+  motivo,
+  sinCategorizar,
+  tope,
+}: {
+  filas: readonly PropuestaAutomatica[]
+  nombreDeCategoria: ReadonlyMap<string, string>
+  motivo: string | null
+  /** Movimientos mirados sobre los que ninguna capa tuvo nada que decir. */
+  sinCategorizar: number
+  tope: number
+}) {
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <div>
+          <h2>Categorías que el motor propone</h2>
+          <p className="small faint">
+            El motor no las aplica solo: propone y vos confirmás.{' '}
+            <b>A la tercera vez que confirmes el mismo comercio, deja de preguntar</b> y lo
+            clasifica solo de ahí en adelante.
+          </p>
+        </div>
+        {filas.length > 0 && (
+          <span className="status warn">
+            {filas.length} {filas.length === 1 ? 'propuesta' : 'propuestas'}
+          </span>
+        )}
+      </div>
+
+      {filas.length === 0 ? (
+        <div className="panel-body">
+          <Empty title={sinCategorizar > 0 ? 'Nada que proponer' : 'Todo clasificado'}>
+            {sinCategorizar > 0
+              ? `Quedan ${sinCategorizar} movimientos sin categorizar y ninguna de las cinco capas se anima a decir de qué son. Una regla tuya los resuelve de golpe.`
+              : 'Ningún movimiento espera categoría.'}
+          </Empty>
+        </div>
+      ) : (
+        <>
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Movimiento</th>
+                  <th>Propone</th>
+                  <th className="num">Importe</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {filas.map((fila) => (
+                  <FilaDePropuesta
+                    key={`${fila.entryId}-${fila.categoryId}`}
+                    fila={fila}
+                    categoria={nombreDeCategoria.get(fila.categoryId) ?? 'una categoría tuya'}
+                    motivo={motivo}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {filas.length >= tope && (
+            <div className="panel-body">
+              <div className="banner">
+                Se calculan {tope} propuestas por vez. En cuanto decidas éstas aparecen las
+                siguientes — no se pierde ninguna, sólo no se calculan todas de golpe.
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+function FilaDePropuesta({
+  fila,
+  categoria,
+  motivo,
+}: {
+  fila: PropuestaAutomatica
+  categoria: string
+  motivo: string | null
+}) {
+  // La hoja y no la ruta entera en el botón: «Sí, es Vivienda > Suministros >
+  // Luz y gas» no se lee. La ruta completa sí va en la fila, que es donde hay
+  // sitio y donde importa saber de qué rama cuelga.
+  const hoja = categoria.slice(categoria.lastIndexOf('>') + 1).trim()
+
+  return (
+    <tr>
+      <td className="num faint">{formatDate(fila.movimiento.bookedOn)}</td>
+      <td>
+        <div>{fila.movimiento.description}</div>
+        <div className="small faint">{fila.movimiento.accountName}</div>
+      </td>
+      <td>
+        <div>
+          <b>{categoria}</b>
+        </div>
+        <div className="small faint">
+          Lo sugiere {CAPA[fila.procedencia]}. {fila.motivo}
+        </div>
+      </td>
+      <td className="num">
+        <Money amount={fila.movimiento.amount} currency={fila.movimiento.currency} />
+      </td>
+      <td>
+        <DecidirPropuesta
+          entryId={fila.entryId}
+          categoryId={fila.categoryId}
+          categoria={hoja}
+          procedencia={fila.procedencia}
+          motivo={fila.motivo}
+          dimensiones={
+            fila.dimensiones.length === 0
+              ? ''
+              : JSON.stringify(
+                  fila.dimensiones.map((d) => ({
+                    dimensionId: d.dimensionId,
+                    dimensionValueId: d.valueId,
+                    weightPpm: d.weightPpm,
+                  })),
+                )
+          }
+          bloqueado={motivo}
+        />
+      </td>
+    </tr>
   )
 }
 

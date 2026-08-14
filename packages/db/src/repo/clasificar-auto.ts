@@ -151,6 +151,33 @@ export interface Propuesta {
    * significa que la responsabilidad del error no es del hogar.
    */
   readonly automatica: boolean
+  /**
+   * De qué movimiento habla la propuesta.
+   *
+   * Va acá y no lo busca la pantalla porque el motor ya lo tiene delante: leer
+   * la descripción por segunda vez sería una consulta más por cada propuesta, y
+   * una propuesta sin el movimiento al lado no se puede enseñar. La fecha y el
+   * importe son de la pata bancaria, que es la que una persona reconoce.
+   */
+  readonly movimiento: MovimientoDeLaPropuesta
+}
+
+/**
+ * Lo que devuelve una capa: la propuesta sin el movimiento.
+ *
+ * Las capas no lo adjuntan porque no es asunto suyo — todas reciben la misma
+ * `Pendiente` y copiarlo cinco veces sería cinco sitios donde olvidarse de un
+ * campo. Lo pega el bucle, una sola vez, justo antes de guardar la propuesta.
+ */
+type PropuestaDeCapa = Omit<Propuesta, 'movimiento'>
+
+export interface MovimientoDeLaPropuesta {
+  readonly description: string
+  readonly bookedOn: string
+  /** En unidades mínimas, con el signo de la pata bancaria. */
+  readonly amount: bigint
+  readonly currency: string
+  readonly accountName: string
 }
 
 /**
@@ -202,6 +229,26 @@ export interface ClasificarAutoOptions {
   readonly observaciones?: ReadonlyMap<string, ObservacionDelOrigen> | undefined
   /** Cuántas decisiones del hogar hacen falta para que la memoria aplique sola. */
   readonly minimoDeMemoria?: number | undefined
+  /**
+   * Deja fuera las propuestas que una persona ya rechazó (`propuesta_rechazada`).
+   *
+   * Por defecto **false**, para no cambiar lo que ven /reglas ni la
+   * importación: ahí la pregunta es «qué propondría el motor», y esconder lo
+   * rechazado convertiría esa medición en otra cosa. Lo enciende la cola de
+   * revisión, que es la única pantalla donde una propuesta rechazada volviendo
+   * a aparecer significa que la cola no sirve.
+   */
+  readonly excluirRechazadas?: boolean | undefined
+  /**
+   * Cuántos movimientos sin categorizar mirar como mucho, de los más antiguos a
+   * los más nuevos.
+   *
+   * Es para la pantalla, no para la importación. Medido: 566 sin categorizar se
+   * recalculan en 75-140 ms, pero 4.528 tardan tres segundos —el coste es
+   * superlineal y el cuello es el SQL, no el motor—, y un hogar que carga dos
+   * años de historia por fichero llega a ese número el primer día.
+   */
+  readonly limite?: number | undefined
 }
 
 export interface ResumenDeCapa {
@@ -313,7 +360,7 @@ export async function clasificarAutomatico(
     )
   }
 
-  const pendientes = await sinCategorizar(client, opts.entryIds)
+  const pendientes = await sinCategorizar(client, opts.entryIds, opts.limite)
   if (pendientes.length === 0) return vacio()
 
   const plan = await planRules(client, {
@@ -339,6 +386,32 @@ export async function clasificarAutomatico(
   const propuestas: Propuesta[] = []
   const decidido = new Set<string>()
 
+  // El movimiento se le pega a cada propuesta acá, en un solo sitio: una
+  // propuesta sin el movimiento al lado no se puede enseñar, y hacerlo en cada
+  // capa serían cinco sitios donde olvidarse.
+  const pendientePorId = new Map(pendientes.map((fila) => [fila.entryId, fila]))
+  const conMovimiento = (propuesta: PropuestaDeCapa): Propuesta | null => {
+    const fila = pendientePorId.get(propuesta.entryId)
+    // Sin `??`: una propuesta sobre un asiento que no está entre los pendientes
+    // es un fallo del motor, no un dato que falte. Se descarta en vez de
+    // inventarle una descripción vacía que después alguien lee en pantalla.
+    if (fila === undefined) return null
+    return {
+      ...propuesta,
+      movimiento: {
+        description: fila.description,
+        bookedOn: fila.bookedOn,
+        amount: fila.amount,
+        currency: fila.currency,
+        accountName: fila.accountName,
+      },
+    }
+  }
+  const anotar = (propuesta: PropuestaDeCapa): void => {
+    const completa = conMovimiento(propuesta)
+    if (completa !== null) propuestas.push(completa)
+  }
+
   // ── Capa 1: las reglas ────────────────────────────────────────────────────
   // No se resuelve ninguna ruta acá: una regla ya apunta a una cuenta concreta
   // de este hogar, que es la diferencia entre lo que escribió el usuario y lo
@@ -348,7 +421,7 @@ export async function clasificarAutomatico(
     if (categoryId === null) continue
     for (const entryId of reclamo.categoria) {
       decidido.add(entryId)
-      propuestas.push({
+      anotar({
         entryId,
         categoryId,
         dimensiones: plan.dimensiones.get(entryId) ?? [],
@@ -374,7 +447,7 @@ export async function clasificarAutomatico(
       })
       if (elegida === null) continue
       decidido.add(recordada.entryId)
-      propuestas.push({
+      anotar({
         entryId: recordada.entryId,
         categoryId: elegida.opcion.categoryId,
         dimensiones: elegida.opcion.dimensiones,
@@ -398,18 +471,26 @@ export async function clasificarAutomatico(
       porDiccionario(fila, observacion, catalogo, anotarRutaPerdida)
     if (propuesta === null) continue
     decidido.add(fila.entryId)
-    propuestas.push(propuesta)
+    anotar(propuesta)
   }
 
-  const aplicadasPorCapa = opts.aplicar ? await escribir(client, propuestas) : new Map()
+  // Las rechazadas se quitan **al final**, no dentro de cada capa. Si se
+  // quitaran antes, una propuesta rechazada del diccionario haría que el
+  // movimiento «cayera» a la capa de abajo — y debajo del diccionario no hay
+  // ninguna, así que el efecto real sería que a veces se ofrece otra cosa y a
+  // veces nada, según qué capa hubiera contestado. La pregunta que contesta el
+  // motor no cambia porque alguien haya dicho que no a su respuesta.
+  const vivas = opts.excluirRechazadas ? await sinLasRechazadas(client, propuestas) : propuestas
+
+  const aplicadasPorCapa = opts.aplicar ? await escribir(client, vivas) : new Map()
 
   return {
-    propuestas,
+    propuestas: vivas,
     aplicadas: [...aplicadasPorCapa.values()].reduce((total, n) => total + n, 0),
-    sugeridas: propuestas.filter((p) => !opts.aplicar || !p.automatica).length,
+    sugeridas: vivas.filter((p) => !opts.aplicar || !p.automatica).length,
     sinPropuesta: pendientes.length - decidido.size,
     porCapa: CAPAS.map((procedencia) => {
-      const suyas = propuestas.filter((p) => p.procedencia === procedencia)
+      const suyas = vivas.filter((p) => p.procedencia === procedencia)
       return {
         procedencia,
         propuestas: suyas.length,
@@ -469,7 +550,7 @@ function porSenal(
   propias: readonly CuentaPropia[],
   catalogo: CatalogoDeCuentas,
   perdida: (ruta: RutaDeCategoria, procedencia: Procedencia) => undefined,
-): Propuesta | null {
+): PropuestaDeCapa | null {
   const senales = senalesDe(
     {
       amount: money(fila.amount, fila.currency),
@@ -537,7 +618,7 @@ function porProveedor(
   observacion: ObservacionDelOrigen | undefined,
   catalogo: CatalogoDeCuentas,
   perdida: (ruta: RutaDeCategoria, procedencia: Procedencia) => undefined,
-): Propuesta | null {
+): PropuestaDeCapa | null {
   const dicho = observacion?.categoriaDelProveedor
   if (dicho === undefined) return null
   const traduccion = mapearCategoriaDeProveedor(dicho.proveedor, dicho.detailed)
@@ -574,7 +655,7 @@ function porDiccionario(
   observacion: ObservacionDelOrigen | undefined,
   catalogo: CatalogoDeCuentas,
   perdida: (ruta: RutaDeCategoria, procedencia: Procedencia) => undefined,
-): Propuesta | null {
+): PropuestaDeCapa | null {
   const comercio = canonicalMerchant({
     description: fila.description,
     ...(observacion?.counterpartName === undefined
@@ -707,8 +788,10 @@ function esBolsa(nombre: string): boolean {
 interface Pendiente {
   readonly entryId: string
   readonly description: string
+  readonly bookedOn: string
   /** La pata bancaria: la línea que el usuario reconoce en su extracto. */
   readonly accountId: string
+  readonly accountName: string
   readonly accountKind: 'asset' | 'liability'
   readonly amount: bigint
   readonly currency: string
@@ -728,13 +811,16 @@ interface Pendiente {
 async function sinCategorizar(
   client: TenantClient,
   entryIds: readonly string[] | undefined,
+  limite: number | undefined,
 ): Promise<Pendiente[]> {
   if (entryIds !== undefined && entryIds.length === 0) return []
 
   const { rows } = await client.query<{
     entry_id: string
     description: string
+    booked_on: string
     account_id: string
+    account_name: string
     kind: 'asset' | 'liability'
     amount: string
     currency: string
@@ -760,7 +846,7 @@ async function sinCategorizar(
        -- por no tener exactamente una de categoría, así que acá el 'distinct
        -- on' sólo desempata casos degenerados.
        select distinct on (p.entry_id)
-              p.entry_id, p.account_id, a.kind, p.amount, p.currency
+              p.entry_id, p.account_id, a.name as account_name, a.kind, p.amount, p.currency
          from posting p
          join account a on a.id = p.account_id
         where p.entry_id in (select entry_id from candidato)
@@ -769,7 +855,9 @@ async function sinCategorizar(
      )
      select e.id            as entry_id,
             e.description,
+            e.booked_on::text as booked_on,
             b.account_id,
+            b.account_name,
             b.kind,
             b.amount::text  as amount,
             trim(b.currency) as currency
@@ -777,18 +865,84 @@ async function sinCategorizar(
        join entry e     on e.id = c.entry_id
        join categoria k on k.entry_id = c.entry_id and k.patas = 1
        join banco b     on b.entry_id = c.entry_id
-      order by e.booked_on, e.id`,
-    [entryIds === undefined ? null : [...new Set(entryIds)]],
+      order by e.booked_on, e.id
+      ${limite === undefined ? '' : 'limit $2'}`,
+    limite === undefined
+      ? [entryIds === undefined ? null : [...new Set(entryIds)]]
+      : [entryIds === undefined ? null : [...new Set(entryIds)], limite],
   )
 
   return rows.map((row) => ({
     entryId: row.entry_id,
     description: row.description,
+    bookedOn: row.booked_on,
     accountId: row.account_id,
+    accountName: row.account_name,
     accountKind: row.kind,
     amount: BigInt(row.amount),
     currency: row.currency,
   }))
+}
+
+export interface RechazoDePropuesta {
+  readonly entryId: string
+  readonly categoryId: string
+  readonly procedencia?: Procedencia | undefined
+  readonly motivo?: string | undefined
+  /** Quién dijo que no. El correo de la persona, nunca `sistema:`. */
+  readonly rechazadoPor: string
+}
+
+/**
+ * Registra que una persona descartó una propuesta concreta.
+ *
+ * `on conflict do nothing`: rechazar dos veces lo mismo no es un error, es un
+ * doble clic. Y el rechazo **no toca el libro** — el movimiento se queda donde
+ * estaba, en la bolsa de sin categorizar, disponible para que otra capa u otra
+ * persona diga otra cosa.
+ */
+export async function rechazarPropuesta(
+  client: TenantClient,
+  rechazo: RechazoDePropuesta,
+): Promise<{ registrado: boolean }> {
+  const { rowCount } = await client.query(
+    `insert into propuesta_rechazada
+       (tenant_id, entry_id, category_id, procedencia, motivo, rechazado_por)
+     values (current_setting('app.tenant_id')::uuid, $1::uuid, $2::uuid,
+             $3::classification_source, $4, $5)
+     on conflict (entry_id, category_id) do nothing`,
+    [
+      rechazo.entryId,
+      rechazo.categoryId,
+      rechazo.procedencia ?? null,
+      rechazo.motivo ?? null,
+      rechazo.rechazadoPor,
+    ],
+  )
+  return { registrado: (rowCount ?? 0) > 0 }
+}
+
+/**
+ * Quita las propuestas que una persona ya rechazó.
+ *
+ * El par es (asiento, categoría) y no sólo el asiento: rechazar es decir «esto
+ * no va **ahí**», no «no me preguntes más por esto». Si el motor cambia de
+ * opinión y propone otra categoría, se vuelve a ofrecer.
+ */
+async function sinLasRechazadas(
+  client: TenantClient,
+  propuestas: readonly Propuesta[],
+): Promise<Propuesta[]> {
+  if (propuestas.length === 0) return []
+  const { rows } = await client.query<{ entry_id: string; category_id: string }>(
+    `select entry_id, category_id
+       from propuesta_rechazada
+      where entry_id = any($1::uuid[])`,
+    [[...new Set(propuestas.map((p) => p.entryId))]],
+  )
+  if (rows.length === 0) return [...propuestas]
+  const rechazadas = new Set(rows.map((row) => `${row.entry_id}\u001F${row.category_id}`))
+  return propuestas.filter((p) => !rechazadas.has(`${p.entryId}\u001F${p.categoryId}`))
 }
 
 /**
