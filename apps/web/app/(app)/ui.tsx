@@ -36,10 +36,13 @@ export function PageBar({
 /**
  * Un importe. Siempre monoespaciado, siempre con el signo del dato.
  *
- * `tone="flow"` colorea negativo en rojo, que es lo correcto para un
- * movimiento. Para un saldo NO se colorea por defecto: un saldo negativo en
- * una tarjeta de crédito es lo normal y pintarlo de rojo entrena al ojo a
- * ignorar el color justo donde después lo vamos a necesitar.
+ * `tone="flow"` marca los negativos con `--debit`, que desde que se separó de
+ * `--bad` es tinta normal: un cargo no es un error. El signo y la alineación a
+ * la derecha en monoespaciada ya dicen que sale dinero.
+ *
+ * Para un saldo tampoco se colorea: un saldo negativo en una tarjeta de crédito
+ * es lo normal, y pintarlo de rojo entrena al ojo a ignorar el color justo
+ * donde después lo vamos a necesitar.
  */
 export function Money({
   amount,
@@ -70,21 +73,49 @@ export function Money({
 }
 
 /** Variación porcentual. Devuelve un guion cuando la base es cero, nunca "∞%". */
+/**
+ * Una variación contra una referencia. **Sin color.**
+ *
+ * Antes se pintaba de verde o de rojo según si la dirección nos parecía buena,
+ * y eso produjo dos reglas opuestas conviviendo en el mismo producto: en el
+ * registro un menos era rojo porque salía dinero, y aquí el mismo menos era
+ * verde porque gastar menos parecía bueno. El mismo signo, dos colores
+ * contrarios, a dos clicks de distancia.
+ *
+ * Decidido: **el libro informa, quien juzga es quien lo lee.** Un delta lleva
+ * su signo y, cuando hay sitio, la frase que lo interpreta —«menos que julio»—,
+ * que dice lo mismo sin obligar al producto a opinar sobre si una deuda que
+ * sube por comprar una casa es buena o mala.
+ *
+ * El rojo y el verde quedan libres para lo único que un sistema de registro
+ * necesita señalar con color: si el dato **cuadra** con el banco o no.
+ *
+ * `invert` se queda en la firma porque decide la palabra, no el color: en gasto
+ * un aumento es «más», en ingreso es «más» también, pero contra un presupuesto
+ * la lectura cambia. Hoy sólo afecta a `sentido`.
+ */
 export function Delta({
   value,
   base,
   invert = false,
+  sentido = false,
 }: {
   value: bigint
   base: bigint
-  /** En gasto, subir es malo. Poné invert para que el color lo refleje. */
+  /** En gasto, subir es «más». Cambia la palabra, no el color. */
   invert?: boolean
+  /** Añade la palabra debajo: «más que la referencia» / «menos». */
+  sentido?: boolean
 }) {
   const text = pct(value, base)
   if (text === null) return <span className="faint">—</span>
-  const worse = invert ? value > 0n : value < 0n
+  if (!sentido) return <span className="money">{text}</span>
+  const palabra = value === 0n ? 'igual' : value > 0n ? 'más' : 'menos'
   return (
-    <span className={value === 0n ? 'money faint' : worse ? 'money neg' : 'money pos'}>{text}</span>
+    <span className="stack" style={{ gap: '2px' }}>
+      <span className="money">{text}</span>
+      <span className="small faint">{palabra}</span>
+    </span>
   )
 }
 

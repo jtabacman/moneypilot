@@ -266,7 +266,7 @@ export default async function MesPage({
                 <div className="tile">
                   <div className="k">Contra {formatMonth(mesPrevio, 'short')}</div>
                   <div className="v">
-                    <Delta value={gasto - gastoPrevio} base={gastoPrevio} invert />
+                    <Delta value={gasto - gastoPrevio} base={gastoPrevio} invert sentido />
                   </div>
                   <div className="sub">
                     <Money amount={gastoPrevio} currency={moneda} /> el mes pasado
@@ -279,7 +279,7 @@ export default async function MesPage({
                     {promedio === null ? (
                       <span className="faint">—</span>
                     ) : (
-                      <Delta value={gasto - promedio} base={promedio} invert />
+                      <Delta value={gasto - promedio} base={promedio} invert sentido />
                     )}
                   </div>
                   <div className="sub">
@@ -433,7 +433,7 @@ export default async function MesPage({
                         </td>
                         <td className="r faint">{porcentaje(gasto, gasto)}</td>
                         <td className="r">
-                          <Delta value={gasto - gastoPrevio} base={gastoPrevio} invert />
+                          <Delta value={gasto - gastoPrevio} base={gastoPrevio} invert sentido />
                         </td>
                       </tr>
                     </tfoot>

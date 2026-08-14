@@ -53,7 +53,25 @@
 	--warn-soft: #fbf0da;
 	--bad: #a32b22;
 	--bad-soft: #f9e6e3;
-	--debit: #a32b22;
+	/*
+	 * Un cargo NO es un error, y por eso esto ya no es `--bad`.
+	 *
+	 * Eran el mismo hexadecimal, así que en el registro de movimientos había 46
+	 * importes pintados con el rojo de error y ninguno era un error: eran
+	 * compras. Cuando el color de alarma se gasta en lo normal, deja de avisar
+	 * de lo anormal — que es justo lo que un sistema de registro necesita que
+	 * el color haga.
+	 *
+	 * Un importe que sale ya se distingue por su signo y por ir alineado a la
+	 * derecha en monoespaciada. El rojo y el verde quedan reservados para el
+	 * **estado del dato**: cuadra o no cuadra contra el banco.
+	 *
+	 * Y de la misma decisión sale que un delta no se colorea por si su
+	 * dirección nos parece buena: gastar menos que el mes pasado se enseña con
+	 * su signo y con palabras. El libro informa; quien juzga es quien lo lee.
+	 */
+	--debit: var(--ink);
+	--credit: var(--ink);
 
 	/* Ilustrativo. Azul pizarra, fuera de la escala semántica a propósito:
 	   "esto es un ejemplo" no es ni bueno ni malo ni una advertencia. */
@@ -118,13 +136,16 @@
 		--accent-line: #244133;
 		--on-accent: #08150f;
 
-		--ok: #74cfa4;
+		/* Distinto de `--accent`: eran el mismo verde, así que «esto cuadra» se
+		   confundía con el color de la marca y con cualquier enlace. */
+		--ok: #4fb98a;
 		--ok-soft: #14231a;
 		--warn: #d9a441;
 		--warn-soft: #241c0b;
 		--bad: #e8857a;
 		--bad-soft: #2a1513;
-		--debit: #e8857a;
+		--debit: var(--ink);
+	--credit: var(--ink);
 
 		--demo: #93aac6;
 		--demo-soft: #151c25;
@@ -158,7 +179,8 @@
 	--warn-soft: #fbf0da;
 	--bad: #a32b22;
 	--bad-soft: #f9e6e3;
-	--debit: #a32b22;
+	--debit: var(--ink);
+	--credit: var(--ink);
 	--demo: #40566e;
 	--demo-soft: #e9eef4;
 	--demo-line: #c3d0de;
@@ -179,13 +201,14 @@
 	--accent-soft: #15251d;
 	--accent-line: #244133;
 	--on-accent: #08150f;
-	--ok: #74cfa4;
+	--ok: #4fb98a;
 	--ok-soft: #14231a;
 	--warn: #d9a441;
 	--warn-soft: #241c0b;
 	--bad: #e8857a;
 	--bad-soft: #2a1513;
-	--debit: #e8857a;
+	--debit: var(--ink);
+	--credit: var(--ink);
 	--demo: #93aac6;
 	--demo-soft: #151c25;
 	--demo-line: #26313f;
@@ -387,11 +410,23 @@ ol {
 .money {
 	white-space: nowrap;
 }
+/*
+ * El signo de un importe, no un juicio.
+ *
+ * `--debit` es tinta normal desde que se separó de `--bad`, y `--credit` lo es
+ * también: un ingreso no es «bueno» ni un cargo es un error. Los dos se
+ * distinguen por su signo y por ir en monoespaciada alineados a la derecha, que
+ * es como se leen las cifras en cualquier extracto.
+ *
+ * El verde de `--ok` queda para lo único que necesita señalarse con color en un
+ * sistema de registro: que el dato **cuadra** con el banco. Si se gasta en
+ * pintar de verde cada ingreso, cuando aparezca el que importa nadie lo ve.
+ */
 .neg {
 	color: var(--debit);
 }
 .pos {
-	color: var(--ok);
+	color: var(--credit);
 }
 
 /* ═══ Controles ══════════════════════════════════════════════════════════ */
