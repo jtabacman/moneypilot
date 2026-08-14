@@ -164,6 +164,14 @@ export const ARBOL_POR_DEFECTO: readonly NodoDeCategoria[] = [
     hijos: [
       { nombre: 'Espectáculos y cultura', tipo: 'expense' },
       { nombre: 'Suscripciones y streaming', tipo: 'expense' },
+      // Aparte de streaming a propósito: Adobe, un gestor de contraseñas o un
+      // almacenamiento en la nube son herramienta, no ocio, y sumarlos con
+      // Netflix en un mismo total hace que «cuánto me cuesta el
+      // entretenimiento» conteste otra cosa. Cuelga de aquí y no de
+      // 'Sociedad > Oficina' porque la mayoría de estas suscripciones las paga
+      // la persona y no la sociedad — y cuando las paga la sociedad, eso lo
+      // dice la dimensión entidad, que es el otro eje.
+      { nombre: 'Software y herramientas', tipo: 'expense' },
       { nombre: 'Libros y prensa', tipo: 'expense' },
       { nombre: 'Deporte y gimnasio', tipo: 'expense' },
     ],

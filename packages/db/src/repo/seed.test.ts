@@ -10,6 +10,7 @@
  * los tests del paquete.
  */
 
+import { buscarPorRuta } from '@moneypilot/core'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   createPool,
@@ -129,7 +130,14 @@ suite('hogar de ejemplo', () => {
     expect(rows.filter((r) => r.kind === 'asset')).toHaveLength(13)
   })
 
-  it('las categorías tienen jerarquía real: Luz cuelga de Servicios y Servicios de Casa', async () => {
+  it('las categorías son las del árbol del núcleo, con su jerarquía', async () => {
+    // Antes esperaba «Luz > Servicios > Casa», que era la taxonomía propia de
+    // este sembrador. Ya no la tiene: sus categorías son un índice contra
+    // `ARBOL_POR_DEFECTO`, que es el mismo plan con el que nace un hogar de
+    // verdad y contra el que resuelven las cinco capas del clasificador. Que
+    // fueran dos taxonomías distintas hacía que quien cargaba el ejemplo y
+    // luego importaba un extracto viera al motor proponer rutas que su plan no
+    // tenía, sin un solo error.
     const path = await inTenant('base', async (client) =>
       (
         await client.query<{ hijo: string; padre: string | null; abuelo: string | null }>(
@@ -137,12 +145,48 @@ suite('hogar de ejemplo', () => {
              from account hijo
              left join account padre on padre.id = hijo.parent_id
              left join account abuelo on abuelo.id = padre.parent_id
-            where hijo.name = 'Luz'`,
+            where hijo.name = 'Luz y gas'`,
         )
       ).rows.at(0),
     )
 
-    expect(path).toEqual({ hijo: 'Luz', padre: 'Servicios', abuelo: 'Casa' })
+    expect(path).toEqual({ hijo: 'Luz y gas', padre: 'Suministros', abuelo: 'Vivienda' })
+  })
+
+  it('ninguna categoría del ejemplo queda fuera del árbol del núcleo', async () => {
+    // La comprobación que impide que la taxonomía vuelva a bifurcarse: cada
+    // cuenta de gasto o ingreso que escribe el ejemplo tiene que ser un nodo
+    // del árbol, con su mismo tipo. Si alguien añade mañana una categoría a
+    // mano acá, rompe — y ése es exactamente el momento en que hay que
+    // decidir si el árbol necesita esa hoja o si el ejemplo se equivocó.
+    const sueltas = await inTenant('base', async (client) => {
+      const { rows } = await client.query<{
+        id: string
+        name: string
+        kind: string
+        parent_id: string | null
+      }>(
+        "select id, name, kind::text as kind, parent_id from account where kind in ('expense','income')",
+      )
+      const porId = new Map(rows.map((r) => [r.id, r]))
+      const ruta = (fila: (typeof rows)[number]): string => {
+        const partes = [fila.name]
+        let actual = fila.parent_id
+        while (actual !== null) {
+          const padre = porId.get(actual)
+          if (padre === undefined) break
+          partes.unshift(padre.name)
+          actual = padre.parent_id
+        }
+        return partes.join(' > ')
+      }
+      return rows
+        .map((fila) => ({ fila, nodo: buscarPorRuta(ruta(fila)) }))
+        .filter(({ fila, nodo }) => nodo === undefined || nodo.tipo !== fila.kind)
+        .map(({ fila }) => `${ruta(fila)} (${fila.kind})`)
+    })
+
+    expect(sueltas).toEqual([])
   })
 
   it('cada asiento balancea a cero dentro de cada moneda', async () => {

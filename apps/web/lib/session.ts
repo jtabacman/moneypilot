@@ -7,7 +7,7 @@
 
 import 'server-only'
 
-import { createPool, withUserScope } from '@moneypilot/db'
+import { createPool, instalarPlanDeCuentas, withUserScope } from '@moneypilot/db'
 import { databaseUrl } from './env'
 import { type AuthUser, currentUser } from './supabase/server'
 
@@ -110,6 +110,24 @@ export async function resolveSession(): Promise<SessionState> {
       )
       const tenantId = created.rows[0]?.provision_household
       if (tenantId === undefined) throw new Error('No se pudo crear el hogar.')
+
+      // El plan de cuentas, en el acto y no cuando alguien se acuerde.
+      //
+      // Sin categorías el motor de clasificación propone y no puede aplicar:
+      // resuelve la ruta contra las cuentas del hogar y no encuentra ninguna.
+      // Un hogar recién creado que conecta su banco vería las cinco capas
+      // trabajar y todos sus movimientos en "Sin categorizar", y el motor
+      // parecería roto cuando lo que falta es el sitio donde escribir.
+      //
+      // Va en la misma transacción que el alta: o hay hogar con plan, o no hay
+      // hogar. Un hogar a medio provisionar es peor que ninguno, porque nada
+      // en la aplicación vuelve a mirarlo.
+      //
+      // `app.tenant_id` se fija acá con el tercer argumento en `true`, que lo
+      // ata a la transacción: al cerrarla desaparece y la conexión vuelve al
+      // pool sin recordar el hogar de nadie.
+      await client.query('select set_config($1, $2, true)', ['app.tenant_id', tenantId])
+      await instalarPlanDeCuentas(client)
 
       return {
         kind: 'active',

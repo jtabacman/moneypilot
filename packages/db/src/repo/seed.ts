@@ -42,7 +42,9 @@
 import { createHash } from 'node:crypto'
 import {
   type AccountId,
+  ARBOL_POR_DEFECTO,
   addDays,
+  aplanarArbol,
   assertBalanced,
   assignOrdinals,
   convert,
@@ -55,6 +57,8 @@ import {
   type Posting,
   parsePlainDate,
   plainDate,
+  type RutaDeCategoria,
+  SEPARADOR_DE_RUTA,
   toDecimalString,
   toParts,
   transactionFingerprint,
@@ -460,183 +464,160 @@ const BANK_ACCOUNTS: readonly SeedAccount[] = [
 ]
 
 /**
- * Categorías con jerarquía real. Son cuentas de gasto e ingreso, no una tabla
- * aparte: así "cuánto cuesta la casa de Madrid" y "cuánto gasté en luz" salen
- * de la misma consulta de saldos que el resto.
+ * Las categorías del hogar de ejemplo, como **índice** contra el árbol del
+ * núcleo — no como una taxonomía propia.
  *
- * Todas en EUR aunque haya gasto en dólares. La cuenta tiene una sola moneda y
- * eso no se negocia; lo que cruza monedas cierra contra las cuentas de cambio.
+ * ── Por qué dejó de tener la suya ───────────────────────────────────────────
+ *
+ * Este catálogo tenía sus 38 categorías escritas a mano, con otros nombres que
+ * las del núcleo: «Casa > Servicios > Luz» donde `ARBOL_POR_DEFECTO` dice
+ * «Vivienda > Suministros > Luz y gas». Mientras nadie instalaba el árbol, las
+ * dos convivían sin tocarse. Desde que `instalarPlanDeCuentas` corre en el alta
+ * de cada hogar, chocan — y de la peor manera posible, que es en silencio:
+ * `resolveAccounts` reutiliza por nombre, dieciséis nombres coincidían
+ * («Hipoteca», «Agua», «Supermercado», «Salud», «IRPF»…), y el hogar quedaba
+ * con las dos taxonomías cruzadas y «Salud» colgando de la raíz en vez de de
+ * «Familia». Ni error, ni aviso.
+ *
+ * Y había un daño mayor y anterior: quien cargaba el ejemplo y después
+ * importaba un extracto veía al motor proponer rutas que su plan no tenía. Las
+ * cinco capas trabajando y las propuestas cayendo en `rutasSinCuenta`, que
+ * ninguna pantalla enseña.
+ *
+ * ── Cómo funciona ahora ─────────────────────────────────────────────────────
+ *
+ * Las claves `cat:*` **se quedan**: hay cientos de movimientos que las
+ * referencian y moverlas sería un cambio enorme sin ningún beneficio. Lo que
+ * cambia es que ya no llevan nombre ni padre propios: llevan una **ruta** del
+ * árbol del núcleo, y el nombre, el tipo y la jerarquía salen de ahí. Si
+ * mañana alguien renombra un nodo del árbol, esto rompe en un test —hay uno que
+ * exige que toda ruta resuelva— y no en la demo de un cliente.
+ *
+ * Dos claves pueden apuntar a la misma ruta: `cat:luz` y `cat:gas` van las dos
+ * a «Luz y gas», porque el árbol del núcleo no las separa. No se pierde ni un
+ * céntimo —los dos movimientos van a la misma cuenta— pero sí se pierde poder
+ * enseñarlas por separado, que es una de las series con estacionalidad de la
+ * demo. Se asume: la alternativa era que el árbol del núcleo tuviera una hoja
+ * más sólo para que la demo luciera, y el árbol es del cliente, no de la demo.
  */
-const CATEGORY_ACCOUNTS: readonly SeedAccount[] = [
-  { key: 'cat:casa', kind: 'expense', name: 'Casa', currency: 'EUR' },
-  { key: 'cat:hipoteca', kind: 'expense', name: 'Hipoteca', currency: 'EUR', parent: 'cat:casa' },
-  { key: 'cat:servicios', kind: 'expense', name: 'Servicios', currency: 'EUR', parent: 'cat:casa' },
-  { key: 'cat:luz', kind: 'expense', name: 'Luz', currency: 'EUR', parent: 'cat:servicios' },
-  { key: 'cat:agua', kind: 'expense', name: 'Agua', currency: 'EUR', parent: 'cat:servicios' },
-  { key: 'cat:gas', kind: 'expense', name: 'Gas', currency: 'EUR', parent: 'cat:servicios' },
-  {
-    key: 'cat:telecom',
-    kind: 'expense',
-    name: 'Internet y telefonía',
-    currency: 'EUR',
-    parent: 'cat:servicios',
-  },
-  { key: 'cat:comunidad', kind: 'expense', name: 'Comunidad', currency: 'EUR', parent: 'cat:casa' },
-  {
-    key: 'cat:seguro-hogar',
-    kind: 'expense',
-    name: 'Seguros de hogar',
-    currency: 'EUR',
-    parent: 'cat:casa',
-  },
-  {
-    key: 'cat:domestico',
-    kind: 'expense',
-    name: 'Personal doméstico',
-    currency: 'EUR',
-    parent: 'cat:casa',
-  },
-  {
-    key: 'cat:obra',
-    kind: 'expense',
-    name: 'Obra y mantenimiento',
-    currency: 'EUR',
-    parent: 'cat:casa',
-  },
-  {
-    key: 'cat:ibi',
-    kind: 'expense',
-    name: 'IBI y tasas municipales',
-    currency: 'EUR',
-    parent: 'cat:casa',
-  },
+const RUTA_DE_CATEGORIA: Readonly<Record<string, RutaDeCategoria>> = {
+  'cat:hipoteca': 'Vivienda > Hipoteca',
+  'cat:luz': 'Vivienda > Suministros > Luz y gas',
+  'cat:agua': 'Vivienda > Suministros > Agua',
+  // Colapsa con `cat:luz`. Ver la cabecera.
+  'cat:gas': 'Vivienda > Suministros > Luz y gas',
+  'cat:telecom': 'Vivienda > Suministros > Internet y telefonía',
+  'cat:comunidad': 'Vivienda > Comunidad de propietarios',
+  // Cambia de rama a propósito: en el árbol del núcleo los seguros van juntos,
+  // porque la pregunta que se hace un patrimonio es «cuánto pago de seguros»
+  // y no «cuánto me cuesta la casa incluyendo su seguro» — eso lo contesta la
+  // dimensión propiedad, que es el otro eje.
+  'cat:seguro-hogar': 'Seguros > Seguro de hogar',
+  'cat:domestico': 'Personal doméstico > Salarios del personal',
+  'cat:obra': 'Vivienda > Obras y reformas',
+  'cat:ibi': 'Vivienda > IBI y tasas municipales',
+  'cat:colegio': 'Educación > Colegio y universidad',
+  'cat:super': 'Día a día > Supermercado',
+  'cat:restaurantes': 'Día a día > Restaurantes y bares',
+  'cat:salud': 'Salud > Dentista',
+  'cat:viajes': 'Viajes > Alojamiento',
+  // Adobe Creative Cloud. Ver la hoja nueva que se le añadió al árbol: es una
+  // herramienta de trabajo y meterla en «Suscripciones y streaming» la habría
+  // sumado con Netflix en el mismo total.
+  'cat:software': 'Ocio y cultura > Software y herramientas',
+  'cat:prensa': 'Ocio y cultura > Suscripciones y streaming',
+  'cat:gimnasio': 'Ocio y cultura > Deporte y gimnasio',
+  'cat:asesoria': 'Honorarios profesionales > Asesoría fiscal y contable',
+  'cat:comisiones': 'Gastos financieros > Comisiones bancarias',
+  'cat:oficina': 'Sociedad > Oficina',
+  'cat:combustible': 'Transporte > Combustible',
+  // «Seguro y taller», y su único movimiento es el seguro del coche. Va al
+  // seguro y no al taller porque es lo que el movimiento es — y es además la
+  // ruta que el diccionario ES emite para las aseguradoras, así que la demo
+  // enseña la misma cuenta que va a usar el motor en un libro de verdad.
+  'cat:taller': 'Seguros > Seguro de vehículos',
+  'cat:irpf': 'Impuestos > IRPF',
+  'cat:sociedades': 'Impuestos > Impuesto de sociedades',
+  'cat:sin-categorizar': 'Sin categorizar',
+  // La bolsa de INGRESO, que antes no existía: el traspaso sugerido entraba
+  // por la de gasto. Un ingreso en una cuenta de gasto no rompe la partida
+  // doble —balancea igual— pero cuenta con el signo cambiado en cualquier
+  // informe que separe gasto de ingreso, y ésa es la mitad de las pantallas.
+  'cat:sin-categorizar-ingreso': 'Ingresos sin categorizar',
+  'cat:honorarios': 'Ingresos > Honorarios y facturación',
+  'cat:alquileres': 'Ingresos > Alquileres',
+  'cat:distribuciones': 'Ingresos > Dividendos y distribuciones',
+  'cat:intereses': 'Ingresos > Intereses y cupones',
+}
 
-  { key: 'cat:familia', kind: 'expense', name: 'Familia', currency: 'EUR' },
-  { key: 'cat:colegio', kind: 'expense', name: 'Colegio', currency: 'EUR', parent: 'cat:familia' },
-  {
-    key: 'cat:super',
-    kind: 'expense',
-    name: 'Supermercado',
-    currency: 'EUR',
-    parent: 'cat:familia',
-  },
-  {
-    key: 'cat:restaurantes',
-    kind: 'expense',
-    name: 'Restaurantes',
-    currency: 'EUR',
-    parent: 'cat:familia',
-  },
-  { key: 'cat:salud', kind: 'expense', name: 'Salud', currency: 'EUR', parent: 'cat:familia' },
-  { key: 'cat:viajes', kind: 'expense', name: 'Viajes', currency: 'EUR', parent: 'cat:familia' },
+/**
+ * Las cuentas de categoría que el ejemplo necesita: las rutas de arriba **más
+ * todos sus ancestros**, en orden de profundidad.
+ *
+ * Los ancestros hacen falta aunque no reciban un céntimo: sin «Vivienda» no se
+ * puede colgar «Vivienda > Hipoteca», y sin la jerarquía el informe por área no
+ * existe. Van con una clave derivada de la ruta —nadie los referencia por
+ * nombre— y las hojas conservan su clave `cat:*` de siempre.
+ */
+const CATEGORY_ACCOUNTS: readonly SeedAccount[] = construirCategorias()
 
-  { key: 'cat:suscripciones', kind: 'expense', name: 'Suscripciones', currency: 'EUR' },
-  {
-    key: 'cat:software',
-    kind: 'expense',
-    name: 'Software',
-    currency: 'EUR',
-    parent: 'cat:suscripciones',
-  },
-  {
-    key: 'cat:prensa',
-    kind: 'expense',
-    name: 'Prensa y streaming',
-    currency: 'EUR',
-    parent: 'cat:suscripciones',
-  },
-  {
-    key: 'cat:gimnasio',
-    kind: 'expense',
-    name: 'Gimnasio',
-    currency: 'EUR',
-    parent: 'cat:suscripciones',
-  },
+/** Qué clave de cuenta le corresponde a cada `cat:*`. Ver `cat:gas`. */
+const CANONICA_DE_CATEGORIA: ReadonlyMap<string, string> = new Map(
+  Object.entries(RUTA_DE_CATEGORIA).map(([clave, ruta]) => [clave, claveDeRuta(ruta)]),
+)
 
-  { key: 'cat:profesional', kind: 'expense', name: 'Profesional', currency: 'EUR' },
-  {
-    key: 'cat:asesoria',
-    kind: 'expense',
-    name: 'Asesoría contable',
-    currency: 'EUR',
-    parent: 'cat:profesional',
-  },
-  {
-    key: 'cat:comisiones',
-    kind: 'expense',
-    name: 'Comisiones bancarias',
-    currency: 'EUR',
-    parent: 'cat:profesional',
-  },
-  {
-    key: 'cat:oficina',
-    kind: 'expense',
-    name: 'Oficina',
-    currency: 'EUR',
-    parent: 'cat:profesional',
-  },
+/**
+ * Añade a un mapa indexado por clave de cuenta las claves `cat:*` que colapsan.
+ *
+ * Hay dos mapas construidos a partir de `ALL_ACCOUNTS` —el de ids y el de
+ * monedas— y los dos tienen que conocer los alias. Se hace con una sola
+ * función porque la primera versión sólo arregló el de ids: el ejemplo se caía
+ * más adelante, al buscar la moneda de `cat:gas`, con un error distinto que
+ * parecía otro problema.
+ */
+function conAliasDeCategoria<T>(mapa: Map<string, T>): Map<string, T> {
+  for (const [clave, canonica] of CANONICA_DE_CATEGORIA) {
+    const valor = mapa.get(canonica)
+    if (valor !== undefined) mapa.set(clave, valor)
+  }
+  return mapa
+}
 
-  { key: 'cat:vehiculo', kind: 'expense', name: 'Vehículo', currency: 'EUR' },
-  {
-    key: 'cat:combustible',
-    kind: 'expense',
-    name: 'Combustible',
-    currency: 'EUR',
-    parent: 'cat:vehiculo',
-  },
-  {
-    key: 'cat:taller',
-    kind: 'expense',
-    name: 'Seguro y taller',
-    currency: 'EUR',
-    parent: 'cat:vehiculo',
-  },
+function claveDeRuta(ruta: RutaDeCategoria): string {
+  // La primera clave `cat:*` que apunte a esa ruta manda, para que las cuentas
+  // del ejemplo conserven los identificadores derivados que ya tenían. Si
+  // ninguna la reclama —es un ancestro— se deriva de la ruta.
+  for (const [clave, suya] of Object.entries(RUTA_DE_CATEGORIA)) {
+    if (suya === ruta) return clave
+  }
+  return `cat:ruta:${ruta}`
+}
 
-  { key: 'cat:impuestos', kind: 'expense', name: 'Impuestos', currency: 'EUR' },
-  { key: 'cat:irpf', kind: 'expense', name: 'IRPF', currency: 'EUR', parent: 'cat:impuestos' },
-  {
-    key: 'cat:sociedades',
-    kind: 'expense',
-    name: 'Impuesto de sociedades',
-    currency: 'EUR',
-    parent: 'cat:impuestos',
-  },
+function construirCategorias(): readonly SeedAccount[] {
+  const necesarias = new Set<RutaDeCategoria>()
+  for (const ruta of Object.values(RUTA_DE_CATEGORIA)) {
+    const partes = ruta.split(SEPARADOR_DE_RUTA)
+    for (let n = 1; n <= partes.length; n += 1) {
+      necesarias.add(partes.slice(0, n).join(SEPARADOR_DE_RUTA))
+    }
+  }
 
-  // La misma cuenta puente que usa el importador. Si el hogar ya la tiene, se
-  // reutiliza: dos "Sin categorizar" sería exactamente el desorden que el
-  // producto promete resolver.
-  { key: 'cat:sin-categorizar', kind: 'expense', name: 'Sin categorizar', currency: 'EUR' },
-
-  { key: 'cat:ingresos', kind: 'income', name: 'Ingresos', currency: 'EUR' },
-  {
-    key: 'cat:honorarios',
-    kind: 'income',
-    name: 'Honorarios',
-    currency: 'EUR',
-    parent: 'cat:ingresos',
-  },
-  {
-    key: 'cat:alquileres',
-    kind: 'income',
-    name: 'Alquileres',
-    currency: 'EUR',
-    parent: 'cat:ingresos',
-  },
-  {
-    key: 'cat:distribuciones',
-    kind: 'income',
-    name: 'Distribuciones',
-    currency: 'EUR',
-    parent: 'cat:ingresos',
-  },
-  {
-    key: 'cat:intereses',
-    kind: 'income',
-    name: 'Intereses',
-    currency: 'EUR',
-    parent: 'cat:ingresos',
-  },
-]
+  // Se recorre el árbol aplanado y no el conjunto, para que el orden sea el
+  // suyo: preorden, o sea padres antes que hijos. `insertAccounts` resuelve
+  // `parent_id` contra las que ya insertó, así que el orden no es cosmético.
+  const salida: SeedAccount[] = []
+  for (const nodo of aplanarArbol(ARBOL_POR_DEFECTO)) {
+    if (!necesarias.has(nodo.ruta)) continue
+    salida.push({
+      key: claveDeRuta(nodo.ruta),
+      kind: nodo.tipo,
+      name: nodo.nombre,
+      currency: 'EUR',
+      ...(nodo.rutaDelPadre === null ? {} : { parent: claveDeRuta(nodo.rutaDelPadre) }),
+    })
+  }
+  return salida
+}
 
 /**
  * Cuentas de sistema. Las de cambio son la contrapartida del método Selinger:
@@ -1290,7 +1271,7 @@ function buildMovements(asOf: PlainDate, months: number, accounts: readonly Seed
   const ctx: BuildContext = {
     rng: createRng(RNG_SEED),
     movements: [],
-    currencyOf: new Map(accounts.map((a) => [a.key, a.currency])),
+    currencyOf: conAliasDeCategoria(new Map(accounts.map((a) => [a.key, a.currency]))),
     isCard: new Set(CARDS.map((c) => c.key)),
     cardCharges: new Map(),
   }
@@ -1732,7 +1713,11 @@ function buildMovements(asOf: PlainDate, months: number, accounts: readonly Seed
         on: day(16),
         description: 'Transferência recebida de conta própria',
         into: 'millennium-corrente',
-        category: 'cat:sin-categorizar',
+        // La bolsa de INGRESO, no la de gasto. Entraba contra la de gasto y no
+        // rompía nada visible —la partida doble balancea igual— pero contaba
+        // con el signo cambiado en toda pantalla que separe gasto de ingreso,
+        // que son la mitad. El motor tiene las dos bolsas justamente por esto.
+        category: 'cat:sin-categorizar-ingreso',
         amount: 3_000_00n,
         tag: 'traspaso-sugerido-entrada',
       })
@@ -1819,7 +1804,9 @@ export async function seedDemoHousehold(
   const baseCurrency = (tenantRows[0]?.base_currency ?? 'EUR').trim().toUpperCase()
 
   const accounts = await resolveAccounts(client, tenantId)
-  const accountId = new Map(accounts.map((a) => [a.key, a.id]))
+  // Con los alias: `cat:gas` y `cat:luz` son la misma ruta del árbol, así que
+  // hay una sola cuenta y dos claves que la nombran.
+  const accountId = conAliasDeCategoria(new Map(accounts.map((a) => [a.key, a.id])))
   const accountName = new Map(accounts.map((a) => [a.key, a.name]))
   const values = await resolveDimensions(client, tenantId)
 
