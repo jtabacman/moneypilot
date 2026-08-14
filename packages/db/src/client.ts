@@ -77,21 +77,52 @@ export async function withTenant<T>(
     throw new TenantScopeError(`tenantId inválido: ${JSON.stringify(tenantId)}`)
   }
 
+  if (options.userId !== undefined && !UUID_RE.test(options.userId)) {
+    throw new TenantScopeError(`userId inválido: ${JSON.stringify(options.userId)}`)
+  }
+
   const client = await db.connect()
   try {
-    await client.query('begin')
-    // Degradarse a un rol sin privilegios ANTES de fijar el tenant.
-    // Ver `assumeAppRole`: sin esto, en Supabase la conexión entra como
-    // `postgres` —dueño de las tablas y con BYPASSRLS— y el aislamiento
-    // entre hogares deja de aplicarse sin producir ningún error.
-    await assumeAppRole(client, options.role)
-    await client.query('select set_config($1, $2, true)', ['app.tenant_id', tenantId])
-    if (options.userId !== undefined) {
-      if (!UUID_RE.test(options.userId)) {
-        throw new TenantScopeError(`userId inválido: ${JSON.stringify(options.userId)}`)
-      }
-      await client.query('select set_config($1, $2, true)', ['app.user_id', options.userId])
+    // ── Todo el preámbulo en UN solo viaje ────────────────────────────────
+    //
+    // Eran cuatro consultas sueltas —`begin`, `set local role`, y uno o dos
+    // `set_config`— y cada una es una ida y vuelta completa. En local eso son
+    // dos milisegundos y no se nota; medido desde la función de Vercel contra
+    // Supabase, **una ida y vuelta cuesta 97 ms**, así que el preámbulo se
+    // llevaba cerca de medio segundo en cada pantalla antes de leer un solo
+    // dato. Multiplicado por trece pantallas por sesión, es la mitad de la
+    // sensación de lentitud.
+    //
+    // Van juntas por el protocolo simple, que es el único que admite varias
+    // sentencias en una consulta — y por eso no puede llevar parámetros. Los
+    // dos valores que se interpolan son **uuid ya validados** contra `UUID_RE`
+    // unas líneas más arriba, así que sólo pueden contener `[0-9a-f-]`: no hay
+    // superficie de inyección. El nombre del rol lo valida `ROLE_RE` dentro de
+    // `nombreDeRol`. Si alguna de esas tres validaciones se relajara, esto
+    // pasaría a ser una vulnerabilidad — por eso las tres lanzan en vez de
+    // corregir el valor.
+    const rol = nombreDeRol(options.role)
+    const preambulo = [
+      'begin',
+      rol === null ? null : `set local role ${rol}`,
+      `select set_config('app.tenant_id', '${tenantId}', true)`,
+      options.userId === undefined
+        ? null
+        : `select set_config('app.user_id', '${options.userId}', true)`,
+    ]
+      .filter((linea): linea is string => linea !== null)
+      .join('; ')
+
+    try {
+      await client.query(preambulo)
+    } catch (error) {
+      throw new TenantScopeError(
+        `No se pudo abrir el alcance del hogar${rol === null ? '' : ` con el rol ${rol}`}, así que ` +
+          'Row Level Security no se aplicaría. Ejecutá las migraciones (crean el rol y otorgan la ' +
+          `membresía) o pasá role: null si la conexión ya entra sin privilegios. Causa: ${(error as Error).message}`,
+      )
     }
+
     const result = await fn(client)
     await client.query('commit')
     return result
@@ -105,6 +136,23 @@ export async function withTenant<T>(
   } finally {
     client.release()
   }
+}
+
+/**
+ * El nombre del rol, validado. `null` significa «no te degrades».
+ *
+ * Se separa de `assumeAppRole` porque el preámbulo lo necesita como texto para
+ * meterlo en la consulta múltiple, y la validación no puede quedarse del otro
+ * lado de esa frontera: es lo único que impide que un nombre de rol arbitrario
+ * llegue a un `set local role`.
+ */
+function nombreDeRol(role: string | null | undefined): string | null {
+  if (role === null) return null
+  const name = role ?? DEFAULT_APP_ROLE
+  if (!ROLE_RE.test(name)) {
+    throw new TenantScopeError(`Nombre de rol inválido: ${JSON.stringify(name)}`)
+  }
+  return name
 }
 
 export const DEFAULT_APP_ROLE = 'moneypilot_app'
@@ -211,9 +259,18 @@ export async function withUserScope<T>(
 
   const client = await db.connect()
   try {
-    await client.query('begin')
-    await assumeAppRole(client, options.role)
-    await client.query('select set_config($1, $2, true)', ['app.user_id', userId])
+    // Un solo viaje, por el mismo motivo que en `withTenant`: `userId` ya está
+    // validado como uuid tres líneas más arriba y el rol lo valida `ROLE_RE`.
+    const rol = nombreDeRol(options.role)
+    await client.query(
+      [
+        'begin',
+        rol === null ? null : `set local role ${rol}`,
+        `select set_config('app.user_id', '${userId}', true)`,
+      ]
+        .filter((linea): linea is string => linea !== null)
+        .join('; '),
+    )
     const result = await fn(client)
     await client.query('commit')
     return result

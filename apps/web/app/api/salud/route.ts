@@ -40,6 +40,21 @@ interface Health {
   readonly idaYVueltaMs: number | null
   /** Abrir la conexión: TCP más TLS. Se paga una vez por conexión nueva. */
   readonly conectarMs: number | null
+  /**
+   * El host de la base, **sin credenciales**. Y la región de la función.
+   *
+   * Los dos juntos contestan la única pregunta que decide si una pantalla puede
+   * bajar de un segundo: cuánta distancia hay entre quien pregunta y quien
+   * contesta. Con una ida y vuelta de 97 ms y quince viajes por pantalla, el
+   * suelo es un segundo y medio de red — y no hay optimización de código que
+   * arregle eso; hay que acercarlas.
+   *
+   * El host no es un secreto: es un nombre público de Supabase, y el usuario y
+   * la contraseña se quedan fuera a propósito. Ver `hostDeLaBase`.
+   */
+  readonly host: string | null
+  /** La región de Vercel donde corrió esto: 'iad1', 'fra1'… */
+  readonly region: string | null
   readonly error: string | null
 }
 
@@ -53,6 +68,8 @@ export async function GET(): Promise<NextResponse<Health>> {
     altaDeHogar: false,
     idaYVueltaMs: null,
     conectarMs: null,
+    host: hostDeLaBase(),
+    region: process.env['VERCEL_REGION'] ?? null,
     error: null,
   }
 
@@ -111,4 +128,21 @@ export async function GET(): Promise<NextResponse<Health>> {
   } finally {
     await pool.end()
   }
+}
+
+/**
+ * El host de la cadena de conexión, sin nada más.
+ *
+ * Se parsea a mano y no con `new URL` porque una contraseña con caracteres
+ * raros puede hacer que `URL` lance, y una comprobación de salud que se cae por
+ * el formato de una credencial es peor que ninguna. Lo que devuelve es sólo el
+ * nombre del servidor: nunca el usuario, nunca la contraseña, nunca la base.
+ */
+function hostDeLaBase(): string | null {
+  const url = databaseUrl()
+  if (url === null || url === undefined || url === '') return null
+  const sinEsquema = url.replace(/^[a-z+]+:\/\//i, '')
+  const trasArroba = sinEsquema.slice(sinEsquema.lastIndexOf('@') + 1)
+  const host = trasArroba.split(/[/?]/)[0] ?? ''
+  return host === '' ? null : host
 }
